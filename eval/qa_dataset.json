@@ -1,0 +1,26 @@
+[
+  {"question": "What were 3M's total net sales in fiscal year 2015?",       "ground_truth": "$30.3 billion",  "company": "3M", "year": "2015"},
+  {"question": "What was 3M's net income in fiscal year 2015?",             "ground_truth": "$4.8 billion",   "company": "3M", "year": "2015"},
+  {"question": "How many business segments did 3M operate in 2015?",        "ground_truth": "Five business segments", "company": "3M", "year": "2015"},
+  {"question": "What major acquisition did 3M complete in 2015?",           "ground_truth": "Capital Safety acquisition", "company": "3M", "year": "2015"},
+
+  {"question": "What were 3M's total net sales in fiscal year 2016?",       "ground_truth": "$30.1 billion",  "company": "3M", "year": "2016"},
+  {"question": "What was 3M's net income in fiscal year 2016?",             "ground_truth": "$5.1 billion",   "company": "3M", "year": "2016"},
+  {"question": "How many business segments did 3M operate in 2016?",        "ground_truth": "Five business segments", "company": "3M", "year": "2016"},
+  {"question": "What acquisition did 3M complete in 2016?",                 "ground_truth": "Membrana acquisition", "company": "3M", "year": "2016"},
+
+  {"question": "What were 3M's total net sales in fiscal year 2017?",       "ground_truth": "$31.7 billion",  "company": "3M", "year": "2017"},
+  {"question": "What was 3M's net income in fiscal year 2017?",             "ground_truth": "$4.9 billion",   "company": "3M", "year": "2017"},
+  {"question": "How many business segments did 3M operate in 2017?",        "ground_truth": "Five business segments", "company": "3M", "year": "2017"},
+  {"question": "What major acquisition did 3M make in 2017?",               "ground_truth": "Scott Safety acquisition", "company": "3M", "year": "2017"},
+
+  {"question": "What were 3M's total net sales in fiscal year 2018?",       "ground_truth": "$32.8 billion",  "company": "3M", "year": "2018"},
+  {"question": "What was 3M's net income in fiscal year 2018?",             "ground_truth": "$5.4 billion",   "company": "3M", "year": "2018"},
+  {"question": "How many business segments did 3M operate in 2018?",        "ground_truth": "Five business segments", "company": "3M", "year": "2018"},
+  {"question": "What were the key risks 3M disclosed in its 2018 10-K?",    "ground_truth": "PFAS-related litigation and environmental liabilities", "company": "3M", "year": "2018"},
+
+  {"question": "What were 3M's total net sales in fiscal year 2019?",       "ground_truth": "$32.1 billion",  "company": "3M", "year": "2019"},
+  {"question": "What was 3M's net income in fiscal year 2019?",             "ground_truth": "$4.6 billion",   "company": "3M", "year": "2019"},
+  {"question": "How many business segments did 3M operate in 2019?",        "ground_truth": "Four business segments", "company": "3M", "year": "2019"},
+  {"question": "What major restructuring did 3M announce in 2019?",         "ground_truth": "Reorganization from five to four business segments", "company": "3M", "year": "2019"}
+]
