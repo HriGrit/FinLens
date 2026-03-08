@@ -1,0 +1,10 @@
+# Codex project-level config for FinOps repo
+
+# Run notify script on agent-turn-complete events
+notify = ["bash", ".codex/notify.sh"]
+
+[tui]
+# Built-in TUI notifications via terminal escape sequences (OSC 9 / BEL)
+# Works natively in iTerm2, WezTerm, Ghostty — zero extra setup
+notifications = true
+notification_method = "auto"
