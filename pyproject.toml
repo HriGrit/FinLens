@@ -1,0 +1,13 @@
+[project]
+name = "finops"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "docling>=2.76.0",
+    "llama-index>=0.14.15",
+    "llama-index-embeddings-huggingface>=0.6.1",
+    "llama-index-node-parser-docling>=0.4.2",
+    "llama-index-readers-docling>=0.4.2",
+]

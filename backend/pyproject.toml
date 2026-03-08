@@ -1,0 +1,62 @@
+[project]
+name = "finlens"
+version = "0.1.0"
+description = "FinLens — financial document RAG pipeline"
+readme = "../README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # --- vector store ---
+    "qdrant-client>=1.14.2",
+    # --- llama-index core + runtime ---
+    "llama-index>=0.14.15",
+    "llama-index-embeddings-huggingface>=0.6.1",
+    "llama-index-vector-stores-qdrant>=0.6.0",
+    # --- BM25 ---
+    "llama-index-retrievers-bm25>=0.5.0",
+    # --- reranking ---
+    "sentence-transformers>=3.4.1",
+    # --- LLM ---
+    "litellm>=1.69.0",
+    # --- observability ---
+    "langfuse>=2.59.3,<3",
+    # --- API ---
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "httpx>=0.27.0",
+    # --- utils ---
+    "python-dotenv>=1.1.0",
+]
+
+[dependency-groups]
+ingestion = [
+    "docling>=2.76.0",
+    "llama-index-node-parser-docling>=0.4.2",
+    "llama-index-readers-docling>=0.4.2",
+]
+eval = [
+    "ragas>=0.2.16",
+    "datasets>=3.3.2",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-timeout>=2.3.1",
+    {include-group = "ingestion"},
+    {include-group = "eval"},
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q -m 'not integration and not live'"
+timeout = 60
+markers = [
+  "unit: fast tests that do not require external services",
+  "integration: tests that rely on local services (Qdrant/Langfuse/API)",
+  "live: tests that require external paid/service-backed APIs",
+  "slow: longer-running or large-surface tests",
+  "requires_qdrant: tests that require Qdrant service",
+  "requires_langfuse: tests that require Langfuse service",
+  "requires_openrouter: tests that require OpenRouter key and service",
+]
