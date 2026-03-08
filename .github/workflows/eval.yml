@@ -1,0 +1,28 @@
+name: RAGAS Eval
+
+on:
+  push:
+    paths:
+      - "backend/generation/prompt.py"
+      - "backend/retrieval/**"
+      - "eval/**"
+
+jobs:
+  ragas-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: backend
+
+      - name: Run RAGAS evaluation
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QDRANT_URL: http://localhost:6333
+        run: uv run python ../eval/ragas_eval.py
+        working-directory: backend
