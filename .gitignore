@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+
+# Large data files (download separately)
+data/financebench/
+
+# Scratch artifacts
+output.md
+output_nodes.json
+*.pkl
+.DS_Store
