@@ -54,11 +54,14 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
     for node, embedding in zip(nodes, embeddings):
         payload = {
             "text": node.text,
-            **{k: v for k, v in node.metadata.items() if v is not None},
+            **node.metadata,
         }
         points.append(
             PointStruct(
-                id=str(uuid.uuid4()),
+                id=str(uuid.uuid5(
+                    uuid.NAMESPACE_DNS,
+                    f"{node.metadata.get('filename', '')}:{node.metadata.get('page_number', '')}:{node.metadata.get('chunk_index', '')}",
+                )),
                 vector={"dense": embedding},
                 payload=payload,
             )

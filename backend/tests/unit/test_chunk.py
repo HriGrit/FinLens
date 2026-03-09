@@ -73,6 +73,24 @@ def test_split_paragraph_nodes_keeps_original_text_when_splitter_is_empty():
     assert chunks[0].metadata["chunk_index"] == 0
 
 
+def test_page_number_none_does_not_raise():
+    """A-1: node with page_number=None but all other required fields passes through."""
+    node = TextNode(
+        text="Revenue details.",
+        metadata={
+            "element_type": "paragraph",
+            "page_number": None,
+            "filename": "3M_2022_10K.pdf",
+            "company": "3M",
+            "year": "2022",
+            "doc_type": "10-K",
+        },
+    )
+    chunks = split_paragraph_nodes([node], splitter=_EmptySplitter())
+    assert len(chunks) == 1
+    assert chunks[0].metadata["page_number"] is None
+
+
 def test_split_paragraph_nodes_preserves_required_metadata():
     bad_node = TextNode(
         text="Missing year metadata.",

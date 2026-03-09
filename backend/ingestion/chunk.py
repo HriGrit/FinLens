@@ -99,6 +99,3 @@ def _assert_chunk_metadata(nodes: list[TextNode]) -> None:
             f"Chunk {i} (element_type={node.metadata.get('element_type')!r}) "
             f"missing metadata fields: {missing}"
         )
-        assert node.metadata.get("page_number") is not None or True, (
-            f"Chunk {i} has page_number=None (acceptable for some sources)"
-        )

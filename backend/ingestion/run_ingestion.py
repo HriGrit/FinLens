@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import pickle
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,8 @@ PDF_DIR = REPO_ROOT / "data" / "financebench" / "pdfs"
 BM25_INDEX_PATH = REPO_ROOT / "data" / "bm25_index.pkl"
 REGISTRY_PATH = REPO_ROOT / "data" / "ingestion_registry.json"
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+
+_YEAR_RE = re.compile(r"^\d{4}(Q[1-4])?$")
 
 
 @dataclass
@@ -55,6 +58,9 @@ def _parse_pdf_filename(pdf_path: Path) -> DocSpec | None:
         return None
     doc_type_raw = parts[-1]                            # "10K" or "10Q"
     year = parts[-2]                                    # "2015" or "2022Q2"
+    if not _YEAR_RE.match(year):
+        print(f"  WARN — skipping unparseable filename (invalid year {year!r}): {pdf_path.name}")
+        return None
     company = "_".join(parts[:-2])                      # "3M" or "ADOBE"
     # Insert hyphen after the digit prefix: "10K" -> "10-K", "10Q" -> "10-Q"
     if len(doc_type_raw) >= 3 and doc_type_raw[:-1].isdigit():
