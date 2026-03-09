@@ -58,13 +58,24 @@ def hybrid_retrieve(
     # --- BM25 ---
     bm25_nodes: list[TextNode] = []
     if BM25_INDEX_PATH.exists():
-        bm25_retriever = load_bm25_index(BM25_INDEX_PATH)
-        if bm25_retriever.bm25 and bm25_retriever.bm25.scores:
-            bm25_corpus_size = bm25_retriever.bm25.scores.get("num_docs", 0)
-            if bm25_corpus_size > 0:
-                bm25_retriever.similarity_top_k = min(top_k, bm25_corpus_size)
-        bm25_results = bm25_retriever.retrieve(query)
-        bm25_nodes = [r.node for r in bm25_results]
+        try:
+            bm25_retriever = load_bm25_index(BM25_INDEX_PATH)
+            if bm25_retriever.bm25:                                      # B-3
+                bm25_corpus_size = bm25_retriever.bm25.corpus_size
+                if bm25_corpus_size > 0:
+                    bm25_retriever.similarity_top_k = min(top_k, bm25_corpus_size)
+            bm25_results = bm25_retriever.retrieve(query)
+            bm25_nodes = [r.node for r in bm25_results]
+            if company:                                                   # B-1
+                bm25_nodes = [n for n in bm25_nodes if n.metadata.get("company") == company]
+            if year:
+                bm25_nodes = [n for n in bm25_nodes if n.metadata.get("year") == year]
+        except Exception as exc:                                          # B-2
+            import warnings
+            warnings.warn(
+                f"BM25 index load failed ({exc}); falling back to dense-only retrieval.",
+                stacklevel=2,
+            )
 
     # --- Qdrant dense ---
     dense_nodes: list[TextNode] = []
@@ -89,9 +100,11 @@ def hybrid_retrieve(
         limit=top_k,
     )
 
-    for r in results.points:
-        text = r.payload.pop("text", "")
-        dense_nodes.append(TextNode(text=text, metadata=r.payload))
+    for r in results.points:                                             # B-4
+        text = r.payload.get("text", "")
+        dense_nodes.append(
+            TextNode(text=text, metadata={k: v for k, v in r.payload.items() if k != "text"})
+        )
 
     # --- Fuse ---
     return _fuse_results(bm25_nodes, dense_nodes)[:top_k]
