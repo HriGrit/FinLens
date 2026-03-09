@@ -43,6 +43,9 @@ def generate(
     )
 
     answer = response.choices[0].message.content
+    if answer is None:
+        raise ValueError("Model returned empty response.")
+
     usage = response.usage
     try:
         cost = litellm.completion_cost(completion_response=response)

@@ -28,7 +28,7 @@ def test_rag_trace_visible_in_langfuse() -> None:
     query = "What was 3M's total revenue in 2022?"
 
     trace = create_trace("rag_query", metadata={"company": "3M", "year": "2022"})
-    nodes = retrieve_and_rerank(query, company="3M", year="2022", trace=trace)
+    nodes, _ = retrieve_and_rerank(query, company="3M", year="2022", trace=trace)
     assert nodes, "No nodes returned — is the corpus indexed?"
 
     result = generate(query=query, context_nodes=nodes, trace=trace)

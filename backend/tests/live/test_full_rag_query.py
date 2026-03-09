@@ -19,7 +19,7 @@ def test_full_rag_query_uses_live_openrouter(
     query = "What were 3M's 2022 net sales?"
     monkeypatch.setattr(hybrid, "QDRANT_COLLECTION", seeded_qdrant_collection)
 
-    nodes = retrieve_and_rerank(query, retrieval_top_k=5, rerank_top_k=2, company="3M", year="2022")
+    nodes, _ = retrieve_and_rerank(query, retrieval_top_k=5, rerank_top_k=2, company="3M", year="2022")
     if not nodes:
         pytest.skip("No live retrieval candidates were returned.")
 

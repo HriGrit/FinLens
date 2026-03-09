@@ -22,7 +22,7 @@ def retrieve_and_rerank(
     company: str | None = None,
     year: str | None = None,
     trace=None,
-) -> list[TextNode]:
+) -> tuple[list[TextNode], int]:
     """Hybrid-retrieve then cross-encoder rerank. Returns rerank_top_k nodes."""
     if trace is not None:
         with span(trace, "hybrid_retrieve", input={"query": query, "top_k": retrieval_top_k}):
@@ -31,9 +31,9 @@ def retrieve_and_rerank(
         candidates = hybrid_retrieve(query, top_k=retrieval_top_k, company=company, year=year)
 
     if not candidates:
-        return []
+        return [], 0
 
     if trace is not None:
         with span(trace, "cross_encoder_rerank", input={"n_candidates": len(candidates)}):
-            return rerank(query, candidates, top_k=rerank_top_k)
-    return rerank(query, candidates, top_k=rerank_top_k)
+            return rerank(query, candidates, top_k=rerank_top_k), len(candidates)
+    return rerank(query, candidates, top_k=rerank_top_k), len(candidates)
