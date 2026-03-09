@@ -15,8 +15,11 @@ from .prompt import build_prompt
 DEFAULT_MODEL = "openrouter/stepfun/step-3.5-flash:free"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
-litellm.success_callback = ["langfuse"]
-litellm.failure_callback = ["langfuse"]
+
+def register_langfuse_callbacks() -> None:
+    """Install LiteLLM -> Langfuse callbacks. Call at app startup, never at import."""
+    litellm.success_callback = ["langfuse"]
+    litellm.failure_callback = ["langfuse"]
 
 
 def generate(

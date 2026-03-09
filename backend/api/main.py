@@ -15,6 +15,7 @@ import asyncio
 import dataclasses
 import time
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -22,12 +23,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from qdrant_client import QdrantClient
 
-from generation.generate import DEFAULT_MODEL, generate
+from generation.generate import DEFAULT_MODEL, generate, register_langfuse_callbacks
 from generation.openrouter_models import get_free_models
 from observability.tracing import create_trace
 from retrieval.pipeline import retrieve_and_rerank
 
-app = FastAPI(title="FinLens API", version="0.1.0")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    register_langfuse_callbacks()
+    yield
+
+
+app = FastAPI(title="FinLens API", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from llama_index.core.schema import TextNode
 
-from observability.tracing import span
 from .hybrid import hybrid_retrieve
 from .rerank import rerank
 
@@ -25,8 +24,9 @@ def retrieve_and_rerank(
 ) -> tuple[list[TextNode], int]:
     """Hybrid-retrieve then cross-encoder rerank. Returns rerank_top_k nodes."""
     if trace is not None:
-        with span(trace, "hybrid_retrieve", input={"query": query, "top_k": retrieval_top_k}):
-            candidates = hybrid_retrieve(query, top_k=retrieval_top_k, company=company, year=year)
+        s = trace.span(name="hybrid_retrieve", input={"query": query, "top_k": retrieval_top_k})
+        candidates = hybrid_retrieve(query, top_k=retrieval_top_k, company=company, year=year)
+        s.end(output={"n_candidates": len(candidates)})
     else:
         candidates = hybrid_retrieve(query, top_k=retrieval_top_k, company=company, year=year)
 
@@ -34,6 +34,8 @@ def retrieve_and_rerank(
         return [], 0
 
     if trace is not None:
-        with span(trace, "cross_encoder_rerank", input={"n_candidates": len(candidates)}):
-            return rerank(query, candidates, top_k=rerank_top_k), len(candidates)
+        s = trace.span(name="cross_encoder_rerank", input={"n_candidates": len(candidates)})
+        results = rerank(query, candidates, top_k=rerank_top_k)
+        s.end(output={"n_results": len(results)})
+        return results, len(candidates)
     return rerank(query, candidates, top_k=rerank_top_k), len(candidates)
