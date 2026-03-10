@@ -2,11 +2,11 @@ import { create } from 'zustand'
 
 export interface Citation {
   index: number
-  company: string
-  year: string
-  doc_type: string
-  page_number: number
-  filename: string
+  company: string | null
+  year: string | null
+  doc_type: string | null
+  page_number: number | null
+  filename: string | null
   excerpt?: string
 }
 

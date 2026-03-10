@@ -1,9 +1,11 @@
+import axios from 'axios'
 import { useState, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Send, Loader2, Trash2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { useAppStore } from '../../stores/useAppStore'
 import { postChat } from '../../api/client'
+import type { AxiosError } from 'axios'
 
 function SkeletonMessage() {
   return (
@@ -23,10 +25,18 @@ export function ChatPanel() {
   const { messages, isLoading, addMessage, setLoading, clearMessages, company, year, model } = useAppStore()
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pendingRequest = useRef<AbortController | null>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isLoading])
+
+  useEffect(() => {
+    return () => {
+      pendingRequest.current?.abort()
+      pendingRequest.current = null
+    }
+  }, [])
 
   const submit = async () => {
     const query = input.trim()
@@ -35,24 +45,51 @@ export function ChatPanel() {
     setInput('')
     addMessage({ id: crypto.randomUUID(), role: 'user', content: query })
     setLoading(true)
+    const controller = new AbortController()
+    pendingRequest.current = controller
 
     try {
-      const result = await postChat({
+      const result = await postChat(
+        {
         query,
         company: company || undefined,
         year: year || undefined,
         model: model || undefined,
-      })
+        },
+        controller.signal,
+      )
       addMessage({
         id: crypto.randomUUID(),
         role: 'assistant',
         content: result.answer,
         citations: result.citations,
+        reasoning: result.reasoning,
+        trace_id: result.trace_id,
         usage: result.usage,
         model: result.model,
         latency_ms: result.latency_ms,
       })
     } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        const axiosError = err as AxiosError<{ detail?: string } | string>
+        if (axiosError.code === 'ERR_CANCELED') return
+
+        const responseData = axiosError.response?.data
+        const msg =
+          (typeof responseData === 'object' && responseData !== null && 'detail' in responseData && typeof responseData.detail === 'string'
+            ? responseData.detail
+            : typeof responseData === 'string'
+              ? responseData
+              : axiosError.message) || 'Request failed'
+
+        addMessage({
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `Error: ${msg}`,
+        })
+        return
+      }
+
       const msg = err instanceof Error ? err.message : 'Request failed'
       addMessage({
         id: crypto.randomUUID(),
@@ -60,6 +97,9 @@ export function ChatPanel() {
         content: `Error: ${msg}`,
       })
     } finally {
+      if (pendingRequest.current === controller) {
+        pendingRequest.current = null
+      }
       setLoading(false)
     }
   }

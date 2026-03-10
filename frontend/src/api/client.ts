@@ -15,8 +15,8 @@ export interface ChatRequest {
   rerank_top_k?: number
 }
 
-export async function postChat(req: ChatRequest): Promise<ChatResponse> {
-  const { data } = await api.post<ChatResponse>('/chat', req)
+export async function postChat(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+  const { data } = await api.post<ChatResponse>('/chat', req, { signal })
   return data
 }
 

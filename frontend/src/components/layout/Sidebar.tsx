@@ -1,8 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ServiceGrid } from '../health/ServiceGrid'
 import { IngestionMeter } from '../ingestion/IngestionMeter'
-import { useAppStore } from '../../stores/useAppStore'
+import { DEFAULT_FREE_MODELS, useAppStore } from '../../stores/useAppStore'
 import { usePolling } from '../../hooks/usePolling'
 import { getFreeModels, getServicesStatus, getIngestionStatus } from '../../api/client'
 
@@ -21,6 +21,8 @@ export function Sidebar() {
     setYear,
     setModel,
   } = useAppStore()
+  const [isLoadingModels, setIsLoadingModels] = useState(true)
+  const [modelLoadError, setModelLoadError] = useState<string | null>(null)
 
   usePolling(async () => {
     try {
@@ -36,13 +38,27 @@ export function Sidebar() {
   useEffect(() => {
     let cancelled = false
 
-    void getFreeModels()
-      .then((models) => {
+    const loadModels = async () => {
+      try {
+        const models = await getFreeModels()
         if (!cancelled) {
-          setFreeModels(models)
+          setFreeModels(models.length ? models : DEFAULT_FREE_MODELS)
+          setModelLoadError(null)
         }
-      })
-      .catch(() => {})
+      } catch (error) {
+        if (!cancelled) {
+          setFreeModels(DEFAULT_FREE_MODELS)
+          const msg = error instanceof Error ? error.message : 'Unknown error while loading model list.'
+          setModelLoadError(`Using fallback free models. (${msg})`)
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingModels(false)
+        }
+      }
+    }
+
+    void loadModels()
 
     return () => {
       cancelled = true
@@ -78,15 +94,19 @@ export function Sidebar() {
             onChange={(e) => setModel(e.target.value)}
             className="w-full bg-bg border border-border rounded px-2 py-1.5 text-xs font-mono text-text-primary focus:outline-none focus:border-amber-500/50"
           >
-            {freeModels.length === 0 && (
+            {isLoadingModels && (
               <option value="openrouter/free">Loading free models...</option>
             )}
-            {freeModels.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
-            ))}
+            {!isLoadingModels &&
+              freeModels.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
           </select>
+          {modelLoadError && (
+            <p className="text-[10px] text-amber-400 mt-1">Could not load live model list. Using fallback free models.</p>
+          )}
         </div>
         <div className="flex flex-col gap-1">
           <label className="font-mono text-[10px] text-muted">Company</label>
