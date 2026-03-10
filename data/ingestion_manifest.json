@@ -1,0 +1,44 @@
+{
+  "3M_2015_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": null,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-10T21:08:01Z"
+  },
+  "3M_2016_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": null,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-10T21:08:01Z"
+  },
+  "3M_2017_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": null,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-10T21:08:01Z"
+  },
+  "3M_2018_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": null,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-10T21:08:01Z"
+  },
+  "3M_2019_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": null,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-10T21:08:01Z"
+  },
+  "3M_2020_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1692,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-10T21:16:16Z"
+  }
+}

@@ -25,6 +25,7 @@ from pathlib import Path
 from .chunk import split_paragraph_nodes
 from .index import build_bm25_index, build_qdrant_index
 from .parse import assert_node_metadata, doc_to_nodes, inject_heading_context
+from shared.qdrant import get_qdrant_collection
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -33,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PDF_DIR = REPO_ROOT / "data" / "financebench" / "pdfs"
 BM25_INDEX_PATH = REPO_ROOT / "data" / "bm25_index.pkl"
 REGISTRY_PATH = REPO_ROOT / "data" / "ingestion_registry.json"
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+QDRANT_COLLECTION = get_qdrant_collection("finlens_chunks_dev")
 
 _YEAR_RE = re.compile(r"^\d{4}(Q[1-4])?$")
 
@@ -246,7 +247,9 @@ def main() -> None:
     _save_registry(already_ingested | newly_ingested)
 
     print("\nIngestion complete.")
-    print(f"  Qdrant collection : {QDRANT_COLLECTION}  (verify at http://localhost:6333/dashboard)")
+    qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+    qdrant_ui_hint = "/dashboard" if os.getenv("QDRANT_API_KEY", "") else ""
+    print(f"  Qdrant collection : {QDRANT_COLLECTION}  (verify at {qdrant_url}{qdrant_ui_hint})")
     print(f"  BM25 index        : {BM25_INDEX_PATH}  ({len(all_bm25_nodes)} nodes total)")
     print(f"  Registry          : {REGISTRY_PATH}  ({len(already_ingested | newly_ingested)} ingested)")
 

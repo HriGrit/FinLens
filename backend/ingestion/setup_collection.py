@@ -12,8 +12,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from shared.qdrant import get_qdrant_client, get_qdrant_collection
+
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+COLLECTION_NAME = get_qdrant_collection("finlens_chunks_dev")
 
 
 def setup_collection() -> None:
@@ -22,7 +24,6 @@ def setup_collection() -> None:
     except ModuleNotFoundError:
         # Supports execution via `uv run python backend/ingestion/setup_collection.py`.
         from embed import get_embed_model
-    from qdrant_client import QdrantClient
     from qdrant_client.models import (
         Distance,
         HnswConfigDiff,
@@ -31,7 +32,7 @@ def setup_collection() -> None:
     )
 
     dense_dim = len(get_embed_model().get_text_embedding("test"))
-    client = QdrantClient(url=QDRANT_URL)
+    client = get_qdrant_client(url=QDRANT_URL)
 
     if client.collection_exists(COLLECTION_NAME):
         print(f"Collection '{COLLECTION_NAME}' already exists — skipping creation.")

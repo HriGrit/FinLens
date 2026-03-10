@@ -21,12 +21,12 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
-from qdrant_client import QdrantClient
 
 from generation.generate import DEFAULT_MODEL, generate, register_langfuse_callbacks
 from generation.openrouter_models import get_free_models
 from observability.tracing import create_trace
 from retrieval.pipeline import retrieve_and_rerank
+from shared.qdrant import get_qdrant_client, get_qdrant_collection, get_qdrant_url
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -43,9 +43,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+QDRANT_URL = get_qdrant_url("http://localhost:6333")
+QDRANT_COLLECTION = get_qdrant_collection()
 LANGFUSE_URL = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+PDF_DIR = Path(__file__).resolve().parents[2] / "data" / "financebench" / "pdfs"
 REGISTRY_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_registry.json"
 INGESTION_CACHE_TTL = 30  # seconds
 
@@ -209,7 +210,7 @@ def ingestion_status() -> dict:
         return _ingestion_cache
 
     try:
-        client = QdrantClient(url=QDRANT_URL, timeout=3)
+        client = get_qdrant_client(timeout=3, url=QDRANT_URL)
         count_result = client.count(collection_name=QDRANT_COLLECTION, exact=True)
         indexed_chunks = count_result.count
 
@@ -239,7 +240,7 @@ def ingestion_status() -> dict:
             except Exception:
                 pass
         if total_documents == 0:
-            total_documents = len(filenames)
+            total_documents = len([p for p in PDF_DIR.glob("*.pdf")])
 
         result = {
             "total_documents": total_documents,
@@ -274,6 +275,18 @@ def ingestion_status() -> dict:
 
 @app.get("/status/services")
 async def services_status() -> dict:
+    def _check_qdrant() -> dict:
+        start = time.perf_counter()
+        try:
+            get_qdrant_client(timeout=2, url=QDRANT_URL).get_collections()
+            return {
+                "status": "ok",
+                "latency_ms": int((time.perf_counter() - start) * 1000),
+                "detail": f"Connected to {get_qdrant_url()}",
+            }
+        except Exception as exc:
+            return {"status": "error", "latency_ms": -1, "detail": str(exc)}
+
     async def _check(url: str) -> dict:
         start = time.perf_counter()
         try:
@@ -288,9 +301,11 @@ async def services_status() -> dict:
             return {"status": "error", "latency_ms": -1, "detail": str(exc)}
 
     async with httpx.AsyncClient() as client:
-        qdrant_task = _check(f"{QDRANT_URL}/healthz")
         langfuse_task = _check(f"{LANGFUSE_URL}/api/public/health")
-        qdrant_status, langfuse_status = await asyncio.gather(qdrant_task, langfuse_task)
+        qdrant_status, langfuse_status = await asyncio.gather(
+            asyncio.to_thread(_check_qdrant),
+            langfuse_task,
+        )
 
     result = {
         "qdrant": qdrant_status,

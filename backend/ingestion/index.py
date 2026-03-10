@@ -3,26 +3,46 @@ index.py — Build and persist Qdrant vector index and BM25 index.
 
 Milestone coverage: M2.3 (Qdrant index built), M2.4 (BM25 index persisted).
 """
-import os
+import json
 import pickle
+import hashlib
+import uuid
 from pathlib import Path
 from typing import Any
 
 from llama_index.core.schema import TextNode
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+from shared.qdrant import get_qdrant_client, get_qdrant_collection
+
+QDRANT_COLLECTION = get_qdrant_collection("finlens_chunks_dev")
 
 
-def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLLECTION) -> None:
+def _make_point_id(node: TextNode) -> str:
+    """Build a collision-resistant deterministic ID for a chunk."""
+    identity = {
+        "filename": node.metadata.get("filename", ""),
+        "page_number": node.metadata.get("page_number"),
+        "element_type": node.metadata.get("element_type", ""),
+        "chunk_index": node.metadata.get("chunk_index"),
+        "tree_level": node.metadata.get("tree_level"),
+        "reading_order": node.metadata.get("reading_order"),
+        "text_hash": hashlib.sha256(node.text.encode("utf-8")).hexdigest(),
+    }
+    raw_id = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, raw_id))
+
+
+def build_qdrant_index(nodes: list[TextNode], collection_name: str | None = None) -> None:
     """Embed nodes and upsert into Qdrant. Creates collection if it doesn't exist."""
-    from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, HnswConfigDiff, VectorParams
 
     from .embed import get_embed_model
 
+    if collection_name is None:
+        collection_name = get_qdrant_collection(QDRANT_COLLECTION)
+
     embed_model = get_embed_model()
-    client = QdrantClient(url=QDRANT_URL)
+    client = get_qdrant_client()
 
     # Determine embedding dimension from a test embed
     sample_embedding = embed_model.get_text_embedding("test")
@@ -44,7 +64,6 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
         print(f"Created Qdrant collection '{collection_name}' (dim={dim}, cosine, m=16, ef_construct=200).")
 
     from qdrant_client.models import PointStruct
-    import uuid
 
     points = []
     texts = [node.text for node in nodes]
@@ -58,10 +77,7 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
         }
         points.append(
             PointStruct(
-                id=str(uuid.uuid5(
-                    uuid.NAMESPACE_DNS,
-                    f"{node.metadata.get('filename', '')}:{node.metadata.get('page_number', '')}:{node.metadata.get('chunk_index', '')}",
-                )),
+                id=_make_point_id(node),
                 vector={"dense": embedding},
                 payload=payload,
             )

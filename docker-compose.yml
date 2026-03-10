@@ -10,14 +10,13 @@ services:
     env_file:
       - .env
     environment:
-      QDRANT_URL: http://qdrant:6333
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       LANGFUSE_HOST: http://langfuse:3000
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-finlens_chunks_dev}
     volumes:
       - ./data:/data
     depends_on:
-      qdrant:
-        condition: service_healthy
       langfuse:
         condition: service_healthy
     healthcheck:

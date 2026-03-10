@@ -1,0 +1,67 @@
+{
+  "name": "FinLens (Python + Node + Docker)",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": true,
+      "version": "latest"
+    }
+  },
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "16gb",
+    "storage": "32gb"
+  },
+  "forwardPorts": [
+    8000,
+    3000,
+    5173
+  ],
+  "portsAttributes": {
+    "8000": {
+      "label": "FinLens API"
+    },
+    "3000": {
+      "label": "Langfuse"
+    },
+    "5173": {
+      "label": "Frontend"
+    }
+  },
+  "customizations": {
+    "codespaces": {
+      "openFiles": [
+        "README.md"
+      ]
+    }
+  },
+  "onCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder}",
+  "updateContentCommand": "cd backend && uv sync --frozen --group dev && cd ../frontend && npm ci",
+  "postCreateCommand": "./scripts/codespaces/bootstrap.sh",
+  "secrets": {
+    "QDRANT_URL": {
+      "description": "Qdrant endpoint (local: http://localhost:6333, cloud: your Qdrant Cloud URL)"
+    },
+    "QDRANT_API_KEY": {
+      "description": "Qdrant API key when using cloud mode"
+    },
+    "QDRANT_COLLECTION": {
+      "description": "Qdrant collection name used for ingestion and retrieval"
+    },
+    "OPENROUTER_API_KEY": {
+      "description": "OpenRouter API key for generation"
+    },
+    "LANGFUSE_PUBLIC_KEY": {
+      "description": "Langfuse public key (optional)"
+    },
+    "LANGFUSE_SECRET_KEY": {
+      "description": "Langfuse secret key (optional)"
+    },
+    "LANGFUSE_HOST": {
+      "description": "Langfuse host URL"
+    }
+  }
+}
