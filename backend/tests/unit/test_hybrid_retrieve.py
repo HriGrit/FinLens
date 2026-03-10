@@ -178,17 +178,21 @@ def test_corpus_size_caps_similarity_top_k(monkeypatch, tmp_path):
 
 def test_qdrant_payload_not_mutated(monkeypatch, tmp_path):
     """After hybrid_retrieve, original ScoredPoint.payload must still contain 'text'."""
-    # No BM25 index — keep it simple
-    monkeypatch.setattr(hybrid, "BM25_INDEX_PATH", tmp_path / "nonexistent.pkl")
+    # BM25 index file must exist so retrieval path runs; no BM25 matches are expected.
+    fake_pkl = tmp_path / "bm25_index.pkl"
+    fake_pkl.touch()
+    monkeypatch.setattr(hybrid, "BM25_INDEX_PATH", fake_pkl)
 
     sp = _make_scored_point("dense payload text", {"company": "3M", "year": "2022"})
     original_text = sp.payload["text"]
+    retriever = _make_bm25_retriever([], corpus_size=0)
 
     embed_mock = MagicMock()
     embed_mock.get_text_embedding.return_value = [0.1] * 768
     qdrant_mock = _qdrant_client_mock([sp])
 
     with (
+        patch("ingestion.index.load_bm25_index", return_value=retriever),
         patch("ingestion.embed.get_embed_model", return_value=embed_mock),
         patch("retrieval.hybrid.get_qdrant_client", return_value=qdrant_mock),
     ):
@@ -196,3 +200,26 @@ def test_qdrant_payload_not_mutated(monkeypatch, tmp_path):
 
     # payload must not have been mutated — "text" key must still be present
     assert sp.payload.get("text") == original_text
+
+
+def test_missing_bm25_index_falls_back_to_dense_only(monkeypatch, tmp_path):
+    """Absent bm25_index.pkl must still return dense-only results."""
+    nonexistent = tmp_path / "bm25_index.pkl"
+    monkeypatch.setattr(hybrid, "BM25_INDEX_PATH", nonexistent)
+
+    embed_mock = MagicMock()
+    embed_mock.get_text_embedding.return_value = [0.1] * 768
+    qdrant_mock = _qdrant_client_mock(
+        [_make_scored_point("dense only result", {"company": "3M", "year": "2022"})]
+    )
+
+    with (
+        patch("ingestion.embed.get_embed_model", return_value=embed_mock),
+        patch("retrieval.hybrid.get_qdrant_client", return_value=qdrant_mock),
+        warnings.catch_warnings(record=True) as w,
+    ):
+        warnings.simplefilter("always")
+        result = hybrid.hybrid_retrieve("net sales", top_k=3)
+
+    assert any("BM25 index not found" in str(warning.message) for warning in w)
+    assert result[0].text == "dense only result"

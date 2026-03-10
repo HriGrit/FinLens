@@ -10,6 +10,7 @@ from pathlib import Path
 
 from llama_index.core.schema import TextNode
 from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
+
 BM25_INDEX_PATH = Path(__file__).resolve().parents[2] / "data" / "bm25_index.pkl"
 RRF_K = 60  # standard RRF constant
 
@@ -50,28 +51,33 @@ def hybrid_retrieve(
     from ingestion.index import load_bm25_index
     from qdrant_client.models import FieldCondition, Filter, MatchValue
     from ingestion.embed import get_embed_model
+    import warnings
 
     # --- BM25 ---
     bm25_nodes: list[TextNode] = []
     if BM25_INDEX_PATH.exists():
         try:
             bm25_retriever = load_bm25_index(BM25_INDEX_PATH)
-            if bm25_retriever.bm25:                                      # B-3
+            if bm25_retriever.bm25:                                  # B-3
                 bm25_corpus_size = bm25_retriever.bm25.corpus_size
                 if bm25_corpus_size > 0:
                     bm25_retriever.similarity_top_k = min(top_k, bm25_corpus_size)
             bm25_results = bm25_retriever.retrieve(query)
             bm25_nodes = [r.node for r in bm25_results]
-            if company:                                                   # B-1
+            if company:                                               # B-1
                 bm25_nodes = [n for n in bm25_nodes if n.metadata.get("company") == company]
             if year:
                 bm25_nodes = [n for n in bm25_nodes if n.metadata.get("year") == year]
-        except Exception as exc:                                          # B-2
-            import warnings
+        except Exception as exc:                                      # B-2
             warnings.warn(
                 f"BM25 index load failed ({exc}); falling back to dense-only retrieval.",
                 stacklevel=2,
             )
+    else:
+        warnings.warn(
+            f"BM25 index not found at '{BM25_INDEX_PATH}'. Falling back to dense-only retrieval.",
+            stacklevel=2,
+        )
 
     # --- Qdrant dense ---
     dense_nodes: list[TextNode] = []
