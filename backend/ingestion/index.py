@@ -12,8 +12,15 @@ from llama_index.core.schema import TextNode
 from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 
 
-def _make_point_id(filename: str, page_number: str | int, text: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{filename}:{page_number}:{text}"))
+def _make_point_id(
+    filename: str,
+    page_number: str | int,
+    text: str,
+    element_type: str = "",
+    chunk_index: str | int = "",
+) -> str:
+    key = f"{filename}:{page_number}:{element_type}:{chunk_index}:{text}"
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
 
 
 def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLLECTION) -> None:
@@ -62,6 +69,8 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
                     str(node.metadata.get("filename", "")),
                     str(node.metadata.get("page_number", "")),
                     node.text,
+                    element_type=str(node.metadata.get("element_type", "")),
+                    chunk_index=str(node.metadata.get("chunk_index", "")),
                 ),
                 vector={"dense": embedding},
                 payload=payload,

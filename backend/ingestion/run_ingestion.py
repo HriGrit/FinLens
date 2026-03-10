@@ -39,6 +39,7 @@ MANIFEST_PATH = REPO_ROOT / "data" / "ingestion_manifest.json"
 CHUNKS_DIR = REPO_ROOT / "data" / "chunks"
 _MAX_ERROR_LEN = 500
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +491,7 @@ def main() -> None:
     )
 
     print("\nIngestion complete.")
-    print(f"  Qdrant collection : {QDRANT_COLLECTION}  (verify at http://localhost:6333/dashboard)")
+    print(f"  Qdrant collection : {QDRANT_COLLECTION}  (verify at {QDRANT_URL}/dashboard)")
     print(f"  BM25 index        : {BM25_INDEX_PATH}  ({len(all_bm25_nodes)} nodes total)")
     print(f"  Manifest          : {MANIFEST_PATH}  ({len(manifest)} tracked)")
 

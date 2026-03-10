@@ -69,3 +69,23 @@ def test_point_id_same_text_different_page():
     id2 = _make_point_id("doc.pdf", 6, "same text")
 
     assert id1 != id2
+
+
+def test_point_id_same_page_same_text_different_chunk_index():
+    """Same filename/page/text but different chunk_index must not collide."""
+    from ingestion.index import _make_point_id
+
+    id1 = _make_point_id("doc.pdf", 5, "Revenue: $10M", element_type="paragraph", chunk_index=0)
+    id2 = _make_point_id("doc.pdf", 5, "Revenue: $10M", element_type="paragraph", chunk_index=1)
+
+    assert id1 != id2
+
+
+def test_point_id_stable_same_inputs():
+    """Same inputs always produce the same ID (stable hashing)."""
+    from ingestion.index import _make_point_id
+
+    id1 = _make_point_id("doc.pdf", 5, "Revenue: $10M", element_type="paragraph", chunk_index=0)
+    id2 = _make_point_id("doc.pdf", 5, "Revenue: $10M", element_type="paragraph", chunk_index=0)
+
+    assert id1 == id2
