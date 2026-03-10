@@ -72,7 +72,7 @@ def test_bm25_nodes_filtered_by_company(monkeypatch, tmp_path):
     with (
         patch("ingestion.index.load_bm25_index", return_value=retriever),
         patch("ingestion.embed.get_embed_model", return_value=embed_mock),
-        patch("qdrant_client.QdrantClient", return_value=qdrant_mock),
+        patch("retrieval.hybrid.get_qdrant_client", return_value=qdrant_mock),
     ):
         result = hybrid.hybrid_retrieve("net sales", top_k=10, company="3M", year="2022")
 
@@ -106,7 +106,7 @@ def test_bm25_nodes_filtered_by_year(monkeypatch, tmp_path):
     with (
         patch("ingestion.index.load_bm25_index", return_value=retriever),
         patch("ingestion.embed.get_embed_model", return_value=embed_mock),
-        patch("qdrant_client.QdrantClient", return_value=qdrant_mock),
+        patch("retrieval.hybrid.get_qdrant_client", return_value=qdrant_mock),
     ):
         result = hybrid.hybrid_retrieve("net sales", top_k=10, company="3M", year="2022")
 
@@ -134,7 +134,7 @@ def test_corrupt_bm25_falls_back_to_dense_only(monkeypatch, tmp_path):
     with (
         patch("ingestion.index.load_bm25_index", side_effect=ValueError("corrupt pickle")),
         patch("ingestion.embed.get_embed_model", return_value=embed_mock),
-        patch("qdrant_client.QdrantClient", return_value=qdrant_mock),
+        patch("retrieval.hybrid.get_qdrant_client", return_value=qdrant_mock),
         warnings.catch_warnings(record=True) as w,
     ):
         warnings.simplefilter("always")
@@ -165,7 +165,7 @@ def test_corpus_size_caps_similarity_top_k(monkeypatch, tmp_path):
     with (
         patch("ingestion.index.load_bm25_index", return_value=retriever),
         patch("ingestion.embed.get_embed_model", return_value=embed_mock),
-        patch("qdrant_client.QdrantClient", return_value=qdrant_mock),
+        patch("retrieval.hybrid.get_qdrant_client", return_value=qdrant_mock),
     ):
         hybrid.hybrid_retrieve("net sales", top_k=20)
 
@@ -190,7 +190,7 @@ def test_qdrant_payload_not_mutated(monkeypatch, tmp_path):
 
     with (
         patch("ingestion.embed.get_embed_model", return_value=embed_mock),
-        patch("qdrant_client.QdrantClient", return_value=qdrant_mock),
+        patch("retrieval.hybrid.get_qdrant_client", return_value=qdrant_mock),
     ):
         hybrid.hybrid_retrieve("net sales", top_k=10)
 

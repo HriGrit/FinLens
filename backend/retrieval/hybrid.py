@@ -6,13 +6,10 @@ and returns a deduplicated ranked list of TextNodes.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from llama_index.core.schema import TextNode
-
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 BM25_INDEX_PATH = Path(__file__).resolve().parents[2] / "data" / "bm25_index.pkl"
 RRF_K = 60  # standard RRF constant
 
@@ -51,7 +48,6 @@ def hybrid_retrieve(
 ) -> list[TextNode]:
     """Run BM25 + Qdrant retrieval, fuse with RRF, return top_k nodes."""
     from ingestion.index import load_bm25_index
-    from qdrant_client import QdrantClient
     from qdrant_client.models import FieldCondition, Filter, MatchValue
     from ingestion.embed import get_embed_model
 
@@ -82,7 +78,7 @@ def hybrid_retrieve(
     embed_model = get_embed_model()
     query_embedding = embed_model.get_text_embedding(query)
 
-    client = QdrantClient(url=QDRANT_URL)
+    client = get_qdrant_client()
 
     filter_conditions = []
     if company:

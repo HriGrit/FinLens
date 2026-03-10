@@ -8,6 +8,23 @@ from generation.openrouter_models import FreeModelOption
 from api.main import app
 
 
+class _FakeAsyncResponse:
+    def __init__(self, status_code: int = 200, text: str = "ok"):
+        self.status_code = status_code
+        self.text = text
+
+
+class _FakeAsyncClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get(self, url: str, timeout: int = 2):
+        return _FakeAsyncResponse()
+
+
 @pytest.mark.integration
 def test_health_endpoint_returns_ok():
     with TestClient(app) as client:
@@ -200,3 +217,34 @@ def test_reasoning_retrieved_candidates_reflect_pre_rerank_count(monkeypatch):
     body = response.json()
     assert body["reasoning"]["retrieval"]["retrieved_candidates"] == 20
     assert body["reasoning"]["rerank"]["selected_nodes"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_services_status_builds_qdrant_client_inside_to_thread(monkeypatch):
+    calls = {"client_created": 0, "get_collections": 0}
+
+    class _FakeQdrantClient:
+        def get_collections(self):
+            calls["get_collections"] += 1
+            return []
+
+    def _get_qdrant_client():
+        calls["client_created"] += 1
+        return _FakeQdrantClient()
+
+    async def _to_thread(func, /, *args, **kwargs):
+        assert calls["client_created"] == 0
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("api.main.get_qdrant_client", _get_qdrant_client)
+    monkeypatch.setattr("api.main.asyncio.to_thread", _to_thread)
+    monkeypatch.setattr("api.main.httpx.AsyncClient", _FakeAsyncClient)
+
+    from api.main import services_status
+
+    status = await services_status()
+
+    assert calls["client_created"] == 1
+    assert calls["get_collections"] == 1
+    assert status["qdrant"]["status"] == "ok"

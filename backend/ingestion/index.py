@@ -3,26 +3,27 @@ index.py — Build and persist Qdrant vector index and BM25 index.
 
 Milestone coverage: M2.3 (Qdrant index built), M2.4 (BM25 index persisted).
 """
-import os
 import pickle
+import uuid
 from pathlib import Path
 from typing import Any
 
 from llama_index.core.schema import TextNode
+from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+
+def _make_point_id(filename: str, page_number: str | int, text: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{filename}:{page_number}:{text}"))
 
 
 def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLLECTION) -> None:
     """Embed nodes and upsert into Qdrant. Creates collection if it doesn't exist."""
-    from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, HnswConfigDiff, VectorParams
 
     from .embed import get_embed_model
 
     embed_model = get_embed_model()
-    client = QdrantClient(url=QDRANT_URL)
+    client = get_qdrant_client()
 
     # Determine embedding dimension from a test embed
     sample_embedding = embed_model.get_text_embedding("test")
@@ -44,7 +45,6 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
         print(f"Created Qdrant collection '{collection_name}' (dim={dim}, cosine, m=16, ef_construct=200).")
 
     from qdrant_client.models import PointStruct
-    import uuid
 
     points = []
     texts = [node.text for node in nodes]
@@ -58,10 +58,11 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
         }
         points.append(
             PointStruct(
-                id=str(uuid.uuid5(
-                    uuid.NAMESPACE_DNS,
-                    f"{node.metadata.get('filename', '')}:{node.metadata.get('page_number', '')}:{node.metadata.get('chunk_index', '')}",
-                )),
+                id=_make_point_id(
+                    str(node.metadata.get("filename", "")),
+                    str(node.metadata.get("page_number", "")),
+                    node.text,
+                ),
                 vector={"dense": embedding},
                 payload=payload,
             )
