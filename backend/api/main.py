@@ -45,6 +45,7 @@ app.add_middleware(
 
 LANGFUSE_URL = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
 REGISTRY_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_registry.json"
+MANIFEST_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_manifest.json"
 INGESTION_CACHE_TTL = 30  # seconds
 
 _ingestion_cache: dict | None = None
@@ -229,7 +230,17 @@ def ingestion_status() -> dict:
             if offset is None:
                 break
         total_documents = 0
-        if REGISTRY_PATH.exists():
+        if MANIFEST_PATH.exists():
+            try:
+                manifest = json.loads(MANIFEST_PATH.read_text())
+                total_documents = sum(
+                    1
+                    for entry in manifest.values()
+                    if isinstance(entry, dict) and entry.get("status") == "success"
+                )
+            except Exception:
+                pass
+        if total_documents == 0 and REGISTRY_PATH.exists():
             try:
                 registry = json.loads(REGISTRY_PATH.read_text())
                 if isinstance(registry, dict):
@@ -251,7 +262,14 @@ def ingestion_status() -> dict:
     except Exception as exc:
         try:
             total_documents = 0
-            if REGISTRY_PATH.exists():
+            if MANIFEST_PATH.exists():
+                manifest = json.loads(MANIFEST_PATH.read_text())
+                total_documents = sum(
+                    1
+                    for entry in manifest.values()
+                    if isinstance(entry, dict) and entry.get("status") == "success"
+                )
+            if total_documents == 0 and REGISTRY_PATH.exists():
                 registry = json.loads(REGISTRY_PATH.read_text())
                 if isinstance(registry, dict):
                     total_documents = len(registry.get("ingested", []))
