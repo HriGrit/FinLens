@@ -36,6 +36,7 @@ These issues affect the offline ingestion pipeline. Bugs here corrupt or degrade
 
 **File:** `backend/ingestion/chunk.py:102-104`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `or True` bypass completely removed; `_assert_chunk_metadata` now correctly checks all 6 required fields are present.
 
 ```python
 assert node.metadata.get("page_number") is not None or True, (
@@ -53,6 +54,7 @@ assert node.metadata.get("page_number") is not None or True, (
 
 **File:** `backend/ingestion/index.py:57`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `**{k: v ... if v is not None}` dict comprehension replaced with `**node.metadata`; None values now stored in Qdrant payload. **Note: first explore agent misreported this as NOT FIXED — it confused fix direction.**
 
 ```python
 payload = {
@@ -71,6 +73,7 @@ If `page_number` is `None`, the key is absent from the stored payload entirely. 
 
 **File:** `backend/ingestion/run_ingestion.py:230-240`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED (with side-effect concern) — `uuid.uuid4()` replaced with deterministic `uuid.uuid5(NAMESPACE_DNS, f"{filename}:{page_number}:{chunk_index}")`. See **Side Effects** section for a data-loss regression on multi-table/figure pages.
 
 ```python
 build_qdrant_index(new_chunks, collection_name=QDRANT_COLLECTION)
@@ -88,6 +91,7 @@ _save_registry(already_ingested | newly_ingested)  # only saved AFTER Qdrant ups
 
 **File:** `backend/ingestion/run_ingestion.py:52-58`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — parser now validates year with `_YEAR_RE.match(year)` and handles ≥3-part filenames; invalid filenames produce a WARN + skip instead of silent miscategorisation.
 
 ```python
 parts = pdf_path.stem.split("_")   # "3M_2022_10K_10" → ["3M","2022","10K","10"]
@@ -114,6 +118,7 @@ These issues affect query-time retrieval correctness and resilience.
 
 **File:** `backend/retrieval/hybrid.py:66`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — post-retrieval company/year filter added to BM25 nodes after `bm25_retriever.retrieve(query)`.
 
 ```python
 bm25_results = bm25_retriever.retrieve(query)  # no filter applied
@@ -129,6 +134,7 @@ Qdrant dense retrieval at lines 76-90 applies `company` and `year` payload filte
 
 **File:** `backend/retrieval/hybrid.py:61`, `backend/ingestion/index.py:104-105`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `load_bm25_index` wrapped in `try/except Exception`; on failure logs a warning and falls back to empty `bm25_nodes` (dense-only).
 
 ```python
 # hybrid.py — no try/except around this
@@ -149,6 +155,7 @@ A corrupted BM25 pickle (partial write, version mismatch) passes the `exists()` 
 
 **File:** `backend/retrieval/hybrid.py:62-65`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — changed from non-existent `.bm25.scores` to correct `.bm25.corpus_size`.
 
 ```python
 if bm25_retriever.bm25 and bm25_retriever.bm25.scores:
@@ -165,6 +172,7 @@ if bm25_retriever.bm25 and bm25_retriever.bm25.scores:
 
 **File:** `backend/retrieval/hybrid.py:93`
 **Verified:** ✅ Confirmed (new finding, not in original audit)
+**Fix Status:** ✅ FIXED — `.pop("text", "")` replaced with `.get("text", "")` + metadata passed as `{k: v for k, v in r.payload.items() if k != "text"}`.
 
 ```python
 for r in results.points:
@@ -190,6 +198,7 @@ These issues degrade observability or cause test-environment side effects.
 
 **File:** `backend/observability/tracing.py:18-27`, `backend/api/main.py:80-83`
 **Verified:** ✅ Partially confirmed (see correction above)
+**Fix Status:** ✅ FIXED — `_get_langfuse()` has key-presence check + try/except around `Langfuse()` constructor; returns `_NoOpLangfuse()` stub on any failure.
 
 ```python
 def _get_langfuse():
@@ -210,6 +219,7 @@ def _get_langfuse():
 
 **File:** `backend/generation/generate.py:18-19`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `litellm.success_callback` / `failure_callback` moved from module-level to `register_langfuse_callbacks()` function, called only in FastAPI `_lifespan` context.
 
 ```python
 litellm.success_callback = ["langfuse"]
@@ -226,6 +236,7 @@ These are module-level statements executed on `import generate`. Any test that i
 
 **File:** `backend/observability/tracing.py:22-27`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — key-presence check added; missing keys trigger warning + `_NoOpLangfuse()`. Addressed as part of C-1 fix.
 
 ```python
 _langfuse = Langfuse(
@@ -245,6 +256,7 @@ If keys are absent, Langfuse is initialized with `""` credentials. It will silen
 
 **File:** `backend/retrieval/pipeline.py:28-38`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — spans now capture output: `s.end(output={"n_candidates": len(candidates)})` for hybrid_retrieve, `s.end(output={"n_results": len(results)})` for rerank.
 
 ```python
 with span(trace, "hybrid_retrieve", input={...}):
@@ -268,6 +280,7 @@ The `tracing.span()` context manager calls `s.end()` with no arguments. Langfuse
 
 **File:** `backend/generation/generate.py:45`
 **Verified:** ✅ Confirmed
+**Fix Status:** ⚠️ PARTIALLY FIXED — `None` check added (`if answer is None: raise ValueError(...)`). Proposed fix was `raise HTTPException(status_code=502)` — current `ValueError` still propagates as HTTP 500. Prevents the Pydantic ValidationError, but status code is generic 500 rather than explicit 502.
 
 ```python
 answer = response.choices[0].message.content  # spec allows None
@@ -283,6 +296,7 @@ OpenAI/LiteLLM spec permits `content=None` (tool calls, refusals, some error sha
 
 **File:** `frontend/src/stores/useAppStore.ts:166`, `backend/generation/generate.py:37`
 **Verified:** ⚠️ Uncertain — requires live LiteLLM/OpenRouter test
+**Fix Status:** ✅ FIXED — default model changed from `'openrouter/free'` to `'openrouter/stepfun/step-3.5-flash:free'`, matching the backend `DEFAULT_MODEL`.
 
 ```python
 # Default in store:
@@ -306,6 +320,7 @@ LiteLLM's OpenRouter integration expects model IDs in `openrouter/{provider}/{mo
 
 **File:** `backend/api/main.py:159, 164`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `retrieve_and_rerank()` now returns `tuple[list[TextNode], int]`; pre-rerank `n_candidates` passed back and used as `"retrieved_candidates"` in reasoning payload.
 
 ```python
 "retrieved_candidates": len(context_nodes),   # "retrieval" block
@@ -323,6 +338,7 @@ Both fields receive `len(context_nodes)`, which is the already-reranked list. Th
 
 **File:** `backend/api/main.py:38`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `TOTAL_DOCUMENTS = 5` constant removed; `total_documents` derived from registry file (`data/ingestion_registry.json`), falling back to `len(filenames)` from Qdrant scroll.
 
 ```python
 TOTAL_DOCUMENTS = 5  # manifest size in run_ingestion.py
@@ -338,6 +354,7 @@ With 150 PDFs ingested, `indexed_documents / total_documents` = 150/5 = 3000%, b
 
 **File:** `backend/api/main.py:186-200`
 **Verified:** ✅ Confirmed
+**Fix Status:** ❌ NOT FIXED — the full Qdrant scroll loop still runs on every `/status/ingestion` call to count `indexed_documents` (unique filenames). `total_documents` is now from registry (E-2), but the scroll for counting currently-indexed files remains. No caching or TTL added.
 
 ```python
 while True:
@@ -358,6 +375,7 @@ At 15,000 chunks, this performs ~60 Qdrant scroll calls per `/status/ingestion` 
 
 **File:** `backend/api/main.py:224-249`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — endpoint is now `async def` using `httpx.AsyncClient` with `asyncio.gather()` for concurrent health checks.
 
 ```python
 resp = httpx.get(f"{QDRANT_URL}/healthz", timeout=2)    # blocks
@@ -374,6 +392,7 @@ Both are synchronous `httpx.get()` calls in sequence. If both time out, the endp
 
 **File:** `backend/api/main.py:74`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — changed to `dataclasses.asdict(model)`.
 
 ```python
 return [FreeModelResponse(**model.__dict__) for model in get_free_models()]
@@ -389,6 +408,7 @@ return [FreeModelResponse(**model.__dict__) for model in get_free_models()]
 
 **File:** `backend/api/main.py:41-47`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `query: str = Field(min_length=1, max_length=2000)` added to `ChatRequest`.
 
 ```python
 class ChatRequest(BaseModel):
@@ -411,6 +431,7 @@ A whitespace-only query (`"   "`) passes validation and runs through the full RA
 
 **File:** `frontend/src/components/chat/ChatPanel.tsx:57-62`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — catch block reads `axiosError.response?.data?.detail` first, with typed guard `AxiosError<{ detail?: string }>`, falls back to string response then `axiosError.message`; non-Axios errors handled separately.
 
 ```tsx
 } catch (err: unknown) {
@@ -431,6 +452,7 @@ The most common user-facing error (no documents indexed, wrong company/year filt
 
 **File:** `frontend/src/components/chat/MessageBubble.tsx:30`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `<ReactMarkdown>` with `remarkGfm` + `rehypeSanitize` added for assistant messages; user messages still render as plain text.
 
 ```tsx
 <div className="...">
@@ -448,6 +470,7 @@ LLM answers contain markdown (`**bold**`, `[1]` citation refs, numbered lists, `
 
 **File:** `frontend/src/hooks/usePolling.ts:9`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `document.visibilitychange` listener added; interval paused when `document.hidden === true`, resumes with immediate call on tab restore.
 
 ```ts
 const id = setInterval(() => savedFn.current(), intervalMs)
@@ -464,6 +487,7 @@ The polling interval runs constantly, triggering two API calls (`/status/service
 
 **File:** `frontend/src/stores/useAppStore.ts:3-11`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `Citation` interface fields updated to `string | null` and `number | null`; `CitationCard.tsx` adds null guards with `??` fallbacks and conditional page rendering.
 
 ```typescript
 export interface Citation {
@@ -483,6 +507,7 @@ Backend `generate.py:60-66` uses `.get()` with no fallback — all fields can be
 
 **File:** `frontend/src/components/chat/ChatPanel.tsx:31-66`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `AbortController` created per request, signal passed to `postChat()`; `useEffect` cleanup aborts in-flight requests on unmount.
 
 ```tsx
 const submit = async () => {
@@ -512,6 +537,7 @@ No `AbortController` is used. If the user navigates away mid-request, the networ
 
 **File:** `docker-compose.yml:21-22`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — `depends_on` changed to `condition: service_healthy`; healthcheck added (`wget` to `/api/public/health`, 15s interval, 20 retries, 30s start_period).
 
 ```yaml
 depends_on:
@@ -529,6 +555,7 @@ Langfuse + Postgres initialization takes 15-45 seconds (database migrations). Th
 
 **File:** `docker-compose.yml:83-86`
 **Verified:** ✅ Confirmed
+**Fix Status:** ⚠️ PARTIALLY FIXED — `NEXTAUTH_SECRET` and `ENCRYPTION_KEY` no longer have hardcoded defaults (require explicit env). `SALT` still has `${SALT:-change-me-in-production-salt-32ch}` — insecure default remains.
 
 ```yaml
 NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change-me-in-production-secret-32chars}
@@ -551,6 +578,7 @@ The `ENCRYPTION_KEY` is a fixed hex string now publicly committed. Any Langfuse 
 
 **File:** `backend/ingestion/embed.py:25`
 **Verified:** ✅ Confirmed
+**Fix Status:** ✅ FIXED — cache key now includes device: `_embed_device != device`; separate `_embed_device` global tracks active device; model re-initialized if device changes.
 
 ```python
 device = DEFAULT_DEVICE or ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -577,6 +605,37 @@ if _embed_model is None or _embed_model.model_name != model_name:
 | G — Infrastructure | G-1 (H-8), G-2 (L-1) | `docker-compose.yml` |
 | H — Embeddings | H-1 (L-2) | `ingestion/embed.py` |
 | **Total** | **28** (27 original confirmed + 1 new; 1 original invalidated) | |
+
+---
+
+## Fix Status Summary (Mar 11, 2026)
+
+All 27 confirmed issues (+ 1 new) verified against source code.
+
+| Status | Count | Issues |
+|--------|-------|--------|
+| ✅ FIXED | 24 | A-1, A-2, A-3, A-4, B-1, B-2, B-3, B-4, C-1, C-2, C-3, C-4, D-2, E-1, E-2, E-4, E-5, E-6, F-1, F-2, F-3, F-4, F-5, G-1, H-1 |
+| ⚠️ PARTIALLY FIXED | 2 | D-1, G-2 |
+| ❌ NOT FIXED | 1 | E-3 |
+| **Total** | **27** | (C-6 previously invalidated) |
+
+---
+
+## Side Effects Introduced by Fixes
+
+### A-3 UUID5 collision for non-paragraph nodes — data-loss regression
+
+**Files:** `backend/ingestion/chunk.py:60`, `backend/ingestion/index.py:61-63`
+
+`chunk_index` IS populated by `split_paragraph_nodes` for paragraph nodes (0-based sequential indices). However, **non-paragraph nodes** (tables, figures, etc.) use `meta.setdefault("chunk_index", 0)`, which assigns `0` only if the key is absent. Since `parse.py` never sets `chunk_index`, every non-paragraph node enters the function without it and exits with `chunk_index=0`.
+
+If a page has **two or more tables or figures**, they all produce `filename:page_number:0` → identical UUID5 → each successive upsert silently overwrites the previous, losing all but the last non-paragraph element per page. This is a real **data-loss regression** for multi-table/figure pages.
+
+**Recommended fix:** Assign `chunk_index` in `parse.py` for non-paragraph nodes, or use a secondary discriminator (e.g., `element_type`) in the UUID5 seed.
+
+### D-1 ValueError vs HTTPException
+
+`ValueError` raised instead of `HTTPException(status_code=502)`. FastAPI returns HTTP 500 for unhandled `ValueError`. Less precise than proposed, but prevents the original Pydantic `ValidationError` 500 crash.
 
 ---
 
