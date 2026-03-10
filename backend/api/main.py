@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from generation.generate import DEFAULT_MODEL, generate, register_langfuse_callbacks
 from generation.openrouter_models import get_free_models
+from ingestion.discovery import discover_pdfs
 from observability.tracing import create_trace
 from retrieval.pipeline import retrieve_and_rerank
 from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
@@ -44,12 +45,40 @@ app.add_middleware(
 )
 
 LANGFUSE_URL = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
-REGISTRY_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_registry.json"
 MANIFEST_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_manifest.json"
+PDF_DIR = Path(__file__).resolve().parents[2] / "data" / "financebench" / "pdfs"
 INGESTION_CACHE_TTL = 30  # seconds
 
 _ingestion_cache: dict | None = None
 _ingestion_cache_expires_at: float = 0.0
+
+
+def _discover_ingestible_filenames() -> set[str]:
+    return {spec.path.name for spec in discover_pdfs(PDF_DIR)}
+
+
+def _load_manifest() -> dict[str, dict]:
+    if not MANIFEST_PATH.exists():
+        return {}
+    try:
+        manifest = json.loads(MANIFEST_PATH.read_text())
+    except Exception:
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _manifest_filenames_with_status(
+    manifest: dict[str, dict],
+    status: str,
+    ingestible_filenames: set[str],
+) -> set[str]:
+    return {
+        filename
+        for filename, entry in manifest.items()
+        if filename in ingestible_filenames
+        and isinstance(entry, dict)
+        and entry.get("status") == status
+    }
 
 
 class ChatRequest(BaseModel):
@@ -229,59 +258,54 @@ def ingestion_status() -> dict:
                     filenames.add(fn)
             if offset is None:
                 break
-        total_documents = 0
-        if MANIFEST_PATH.exists():
-            try:
-                manifest = json.loads(MANIFEST_PATH.read_text())
-                total_documents = sum(
-                    1
-                    for entry in manifest.values()
-                    if isinstance(entry, dict) and entry.get("status") == "success"
-                )
-            except Exception:
-                pass
-        if total_documents == 0 and REGISTRY_PATH.exists():
-            try:
-                registry = json.loads(REGISTRY_PATH.read_text())
-                if isinstance(registry, dict):
-                    total_documents = len(registry.get("ingested", []))
-            except Exception:
-                pass
-        if total_documents == 0:
-            total_documents = len(filenames)
+
+        ingestible_filenames = _discover_ingestible_filenames()
+        manifest = _load_manifest()
+        indexed_filenames = filenames & ingestible_filenames
+        failed_filenames = _manifest_filenames_with_status(
+            manifest,
+            status="failed",
+            ingestible_filenames=ingestible_filenames,
+        ) - indexed_filenames
+        pending_documents = len(ingestible_filenames - indexed_filenames - failed_filenames)
 
         result = {
-            "total_documents": total_documents,
-            "indexed_documents": len(filenames),
+            "total_documents": len(ingestible_filenames),
+            "indexed_documents": len(indexed_filenames),
             "indexed_chunks": indexed_chunks,
+            "pending_documents": pending_documents,
+            "failed_documents": len(failed_filenames),
             "status": "idle",
         }
         _ingestion_cache = result
         _ingestion_cache_expires_at = now + INGESTION_CACHE_TTL
         return result
-    except Exception as exc:
+    except Exception:
         try:
-            total_documents = 0
-            if MANIFEST_PATH.exists():
-                manifest = json.loads(MANIFEST_PATH.read_text())
-                total_documents = sum(
-                    1
-                    for entry in manifest.values()
-                    if isinstance(entry, dict) and entry.get("status") == "success"
-                )
-            if total_documents == 0 and REGISTRY_PATH.exists():
-                registry = json.loads(REGISTRY_PATH.read_text())
-                if isinstance(registry, dict):
-                    total_documents = len(registry.get("ingested", []))
+            ingestible_filenames = _discover_ingestible_filenames()
+            manifest = _load_manifest()
+            indexed_filenames = _manifest_filenames_with_status(
+                manifest,
+                status="success",
+                ingestible_filenames=ingestible_filenames,
+            )
+            failed_filenames = _manifest_filenames_with_status(
+                manifest,
+                status="failed",
+                ingestible_filenames=ingestible_filenames,
+            )
         except Exception:
-            total_documents = 0
+            ingestible_filenames = set()
+            indexed_filenames = set()
+            failed_filenames = set()
 
         result = {
-            "total_documents": total_documents,
-            "indexed_documents": 0,
-            "indexed_chunks": 0,
+            "total_documents": len(ingestible_filenames),
+            "indexed_documents": len(indexed_filenames),
+            "indexed_chunks": None,
+            "pending_documents": len(ingestible_filenames - indexed_filenames - failed_filenames),
+            "failed_documents": len(failed_filenames),
             "status": "error",
-            "detail": str(exc),
         }
         _ingestion_cache = result
         _ingestion_cache_expires_at = now + INGESTION_CACHE_TTL

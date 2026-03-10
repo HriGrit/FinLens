@@ -17,15 +17,14 @@ import argparse
 import json
 import os
 import pickle
-import re
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .chunk import split_paragraph_nodes
+from .discovery import PDF_DIR, DocSpec, discover_pdfs, parse_pdf_filename
 from .index import build_bm25_index, build_qdrant_index
 from .parse import assert_node_metadata
 from llama_index.core.schema import TextNode
@@ -34,23 +33,12 @@ from llama_index.core.schema import TextNode
 # Paths
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PDF_DIR = REPO_ROOT / "data" / "financebench" / "pdfs"
 BM25_INDEX_PATH = REPO_ROOT / "data" / "bm25_index.pkl"
 REGISTRY_PATH = REPO_ROOT / "data" / "ingestion_registry.json"
 MANIFEST_PATH = REPO_ROOT / "data" / "ingestion_manifest.json"
 CHUNKS_DIR = REPO_ROOT / "data" / "chunks"
 _MAX_ERROR_LEN = 500
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
-
-_YEAR_RE = re.compile(r"^\d{4}(Q[1-4])?$")
-
-
-@dataclass
-class DocSpec:
-    path: Path
-    company: str
-    year: str
-    doc_type: str = "10-K"
 
 
 # ---------------------------------------------------------------------------
@@ -59,33 +47,26 @@ class DocSpec:
 
 def _parse_pdf_filename(pdf_path: Path) -> DocSpec | None:
     """Parse {COMPANY}_{YEAR}_{DOCTYPE}.pdf into a DocSpec. Returns None if unparseable."""
-    parts = pdf_path.stem.split("_")
-    if len(parts) < 3:
+    spec = parse_pdf_filename(pdf_path)
+    if spec is None:
         print(f"  WARN — skipping unparseable filename: {pdf_path.name}")
         return None
-    doc_type_raw = parts[-1]                            # "10K" or "10Q"
-    year = parts[-2]                                    # "2015" or "2022Q2"
-    if not _YEAR_RE.match(year):
-        print(f"  WARN — skipping unparseable filename (invalid year {year!r}): {pdf_path.name}")
-        return None
-    company = "_".join(parts[:-2])                      # "3M" or "ADOBE"
-    # Insert hyphen after the digit prefix: "10K" -> "10-K", "10Q" -> "10-Q"
-    if len(doc_type_raw) >= 3 and doc_type_raw[:-1].isdigit():
-        doc_type = doc_type_raw[:-1] + "-" + doc_type_raw[-1]
-    else:
-        doc_type = doc_type_raw
-    return DocSpec(path=pdf_path, company=company, year=year, doc_type=doc_type)
+    return spec
 
 
 def _discover_pdfs() -> list[DocSpec]:
     """Glob PDF_DIR for *.pdf files and parse each into a DocSpec."""
+    known_specs = {spec.path.name: spec for spec in discover_pdfs(PDF_DIR)}
     if not PDF_DIR.exists():
         return []
-    specs = []
+
+    specs: list[DocSpec] = []
     for pdf_path in sorted(PDF_DIR.glob("*.pdf")):
-        spec = _parse_pdf_filename(pdf_path)
+        spec = known_specs.get(pdf_path.name)
         if spec is not None:
             specs.append(spec)
+        else:
+            _parse_pdf_filename(pdf_path)
     return specs
 
 

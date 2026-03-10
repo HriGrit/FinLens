@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pytest
 from fastapi.testclient import TestClient
 from llama_index.core.schema import TextNode
@@ -248,3 +249,136 @@ async def test_services_status_builds_qdrant_client_inside_to_thread(monkeypatch
     assert calls["client_created"] == 1
     assert calls["get_collections"] == 1
     assert status["qdrant"]["status"] == "ok"
+
+
+@pytest.mark.integration
+def test_ingestion_status_counts_only_ingestible_pdfs(monkeypatch, tmp_path):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "AAPL_2022_10K.pdf").touch()
+    (pdf_dir / "MSFT_2022_10K.pdf").touch()
+    (pdf_dir / "notes.pdf").touch()
+
+    monkeypatch.setattr("api.main.PDF_DIR", pdf_dir)
+    monkeypatch.setattr("api.main.MANIFEST_PATH", tmp_path / "nonexistent.json")
+
+    class _FakeClient:
+        def count(self, collection_name, exact):
+            return type("R", (), {"count": 100})()
+
+        def scroll(self, **kwargs):
+            return [type("P", (), {"payload": {"filename": "AAPL_2022_10K.pdf"}})()], None
+
+    monkeypatch.setattr("api.main.get_qdrant_client", lambda: _FakeClient())
+    monkeypatch.setattr("api.main._ingestion_cache", None)
+    monkeypatch.setattr("api.main._ingestion_cache_expires_at", 0.0)
+
+    with TestClient(app) as client:
+        response = client.get("/status/ingestion")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_documents"] == 2
+    assert body["indexed_documents"] == 1
+    assert body["indexed_chunks"] == 100
+    assert body["pending_documents"] == 1
+    assert body["failed_documents"] == 0
+    assert body["status"] == "idle"
+
+
+@pytest.mark.integration
+def test_ingestion_status_qdrant_unavailable_returns_null_chunks(monkeypatch, tmp_path):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "AAPL_2022_10K.pdf").touch()
+    (pdf_dir / "MSFT_2022_10K.pdf").touch()
+    (pdf_dir / "GOOG_2022_10K.pdf").touch()
+
+    manifest = {
+        "AAPL_2022_10K.pdf": {"status": "success"},
+        "MSFT_2022_10K.pdf": {"status": "failed"},
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+
+    monkeypatch.setattr("api.main.PDF_DIR", pdf_dir)
+    monkeypatch.setattr("api.main.MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(
+        "api.main.get_qdrant_client",
+        lambda: (_ for _ in ()).throw(ConnectionError("unreachable")),
+    )
+    monkeypatch.setattr("api.main._ingestion_cache", None)
+    monkeypatch.setattr("api.main._ingestion_cache_expires_at", 0.0)
+
+    with TestClient(app) as client:
+        response = client.get("/status/ingestion")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_documents"] == 3
+    assert body["indexed_chunks"] is None
+    assert body["indexed_documents"] == 1
+    assert body["failed_documents"] == 1
+    assert body["pending_documents"] == 1
+    assert body["status"] == "error"
+
+
+@pytest.mark.integration
+def test_ingestion_status_ignores_stale_qdrant_filenames(monkeypatch, tmp_path):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "AAPL_2022_10K.pdf").touch()
+
+    monkeypatch.setattr("api.main.PDF_DIR", pdf_dir)
+
+    class _FakeClient:
+        def count(self, collection_name, exact):
+            return type("R", (), {"count": 100})()
+
+        def scroll(self, **kwargs):
+            return (
+                [
+                    type("P", (), {"payload": {"filename": "AAPL_2022_10K.pdf"}})(),
+                    type("P", (), {"payload": {"filename": "OLD_2021_10K.pdf"}})(),
+                ],
+                None,
+            )
+
+    monkeypatch.setattr("api.main.get_qdrant_client", lambda: _FakeClient())
+    monkeypatch.setattr("api.main.MANIFEST_PATH", tmp_path / "nonexistent.json")
+    monkeypatch.setattr("api.main._ingestion_cache", None)
+    monkeypatch.setattr("api.main._ingestion_cache_expires_at", 0.0)
+
+    with TestClient(app) as client:
+        response = client.get("/status/ingestion")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_documents"] == 1
+    assert body["indexed_documents"] == 1
+    assert body["pending_documents"] == 0
+    assert body["failed_documents"] == 0
+    assert body["status"] == "idle"
+
+
+@pytest.mark.integration
+def test_ingestion_status_response_contains_no_localhost(monkeypatch, tmp_path):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "AAPL_2022_10K.pdf").touch()
+
+    monkeypatch.setattr("api.main.PDF_DIR", pdf_dir)
+    monkeypatch.setattr(
+        "api.main.get_qdrant_client",
+        lambda: (_ for _ in ()).throw(ConnectionError("localhost:6333 refused")),
+    )
+    monkeypatch.setattr("api.main.MANIFEST_PATH", tmp_path / "nonexistent.json")
+    monkeypatch.setattr("api.main._ingestion_cache", None)
+    monkeypatch.setattr("api.main._ingestion_cache_expires_at", 0.0)
+
+    with TestClient(app) as client:
+        response = client.get("/status/ingestion")
+
+    body_text = response.text
+    assert "localhost" not in body_text
+    assert "127.0.0.1" not in body_text
