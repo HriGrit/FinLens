@@ -1,15 +1,35 @@
 name: RAGAS Eval
 
 on:
-  push:
-    paths:
-      - "backend/generation/prompt.py"
-      - "backend/retrieval/**"
-      - "eval/**"
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: Optional sample size to run from the QA dataset
+        required: false
+        type: number
+      dataset:
+        description: Optional dataset path relative to the repository root; defaults to a built-in smoke dataset
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      sample:
+        description: Optional sample size to run from the QA dataset
+        required: false
+        type: number
+      dataset:
+        description: Optional dataset path relative to the repository root; defaults to a built-in smoke dataset
+        required: false
+        type: string
 
 jobs:
   ragas-eval:
     runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
     steps:
       - uses: actions/checkout@v4
 
@@ -17,12 +37,93 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync
         working-directory: backend
+        run: uv sync --group eval
+
+      - name: Wait for Qdrant
+        run: |
+          for _ in {1..30}; do
+            if curl -fsS http://127.0.0.1:6333/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Qdrant did not become ready in time." >&2
+          exit 1
+
+      - name: Seed evaluation corpus
+        working-directory: backend
+        env:
+          QDRANT_URL: http://127.0.0.1:6333
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+
+          from llama_index.core.schema import TextNode
+
+          from ingestion.index import build_bm25_index, build_qdrant_index
+
+          repo_root = Path.cwd().parent
+          nodes = [
+              TextNode(
+                  text="3M reported net sales of $35.4 billion in 2022.",
+                  metadata={
+                      "company": "3M",
+                      "year": "2022",
+                      "doc_type": "10-K",
+                      "page_number": 47,
+                      "filename": "3M_2022_10K.pdf",
+                      "element_type": "paragraph",
+                  },
+              ),
+              TextNode(
+                  text="Net sales increased 11 percent from the prior year.",
+                  metadata={
+                      "company": "3M",
+                      "year": "2022",
+                      "doc_type": "10-K",
+                      "page_number": 48,
+                      "filename": "3M_2022_10K.pdf",
+                      "element_type": "paragraph",
+                  },
+              ),
+          ]
+
+          build_qdrant_index(nodes)
+          build_bm25_index(nodes, output_path=repo_root / "data" / "bm25_index.pkl")
+          PY
+
+      - name: Resolve dataset path
+        id: dataset
+        working-directory: backend
+        run: |
+          if [ -n "${{ inputs.dataset }}" ]; then
+            echo "path=../${{ inputs.dataset }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          cat > ../eval/qa_dataset_ci_smoke.json <<'EOF'
+          [
+            {
+              "question": "What were 3M's net sales in 2022?",
+              "ground_truth": "$35.4 billion",
+              "company": "3M",
+              "year": "2022"
+            }
+          ]
+          EOF
+
+          echo "path=../eval/qa_dataset_ci_smoke.json" >> "$GITHUB_OUTPUT"
 
       - name: Run RAGAS evaluation
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          QDRANT_URL: http://localhost:6333
-        run: uv run python ../eval/ragas_eval.py
+          QDRANT_URL: http://127.0.0.1:6333
         working-directory: backend
+        run: |
+          args=()
+          args+=(--dataset "${{ steps.dataset.outputs.path }}")
+          if [ -n "${{ inputs.sample }}" ]; then
+            args+=(--sample "${{ inputs.sample }}")
+          fi
+          uv run python ../eval/ragas_eval.py "${args[@]}"
