@@ -19,7 +19,7 @@ services:
       qdrant:
         condition: service_healthy
       langfuse:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)\nPY"]
       interval: 10s
@@ -80,14 +80,20 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-langfuse}:${POSTGRES_PASSWORD:-langfuse}@postgres:5432/${POSTGRES_DB:-langfuse}
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change-me-in-production-secret-32chars}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       SALT: ${SALT:-change-me-in-production-salt-32ch}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-d1e0f601167778e7c4f178d0fca9ebb56cadb460241bdd8c548428867563d620}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-true}
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/public/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
 volumes:
   frontend_node_modules:
