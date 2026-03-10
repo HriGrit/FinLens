@@ -6,8 +6,8 @@ Usage (from backend/):
   uv run python -m ingestion.run_ingestion --limit 10     # ingest next 10 unprocessed docs
   uv run python -m ingestion.run_ingestion                # ingest ALL remaining docs
 
-Auto-discovers PDFs in data/financebench/pdfs/ and tracks ingested files in
-data/ingestion_registry.json to skip already-processed documents on future runs.
+Auto-discovers PDFs in data/financebench/pdfs/ and tracks per-document ingestion
+state in data/ingestion_manifest.json.
 
 Milestone coverage: M2.1, M2.2, M2.3, M2.4
 """
@@ -19,12 +19,16 @@ import os
 import pickle
 import re
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .chunk import split_paragraph_nodes
 from .index import build_bm25_index, build_qdrant_index
-from .parse import assert_node_metadata, doc_to_nodes, inject_heading_context
+from .parse import assert_node_metadata
+from llama_index.core.schema import TextNode
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -33,6 +37,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PDF_DIR = REPO_ROOT / "data" / "financebench" / "pdfs"
 BM25_INDEX_PATH = REPO_ROOT / "data" / "bm25_index.pkl"
 REGISTRY_PATH = REPO_ROOT / "data" / "ingestion_registry.json"
+MANIFEST_PATH = REPO_ROOT / "data" / "ingestion_manifest.json"
+CHUNKS_DIR = REPO_ROOT / "data" / "chunks"
+_MAX_ERROR_LEN = 500
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
 
 _YEAR_RE = re.compile(r"^\d{4}(Q[1-4])?$")
@@ -93,23 +100,168 @@ def _load_registry() -> set[str]:
         return set(json.load(f).get("ingested", []))
 
 
-def _save_registry(ingested: set[str]) -> None:
-    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(REGISTRY_PATH, "w") as f:
-        json.dump({"ingested": sorted(ingested)}, f, indent=2)
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-# ---------------------------------------------------------------------------
-# BM25 incremental merge helper
-# ---------------------------------------------------------------------------
+def _migrate_registry_to_manifest() -> dict[str, dict[str, Any]]:
+    """Convert flat registry {"ingested":[...]} to per-doc manifest dict."""
+    migrated: dict[str, dict[str, Any]] = {}
+    for filename in _load_registry():
+        migrated[filename] = {
+            "status": "success",
+            "attempts": 1,
+            "last_error": None,
+            "chunk_count": None,
+            "updated_at": _utc_now_iso(),
+        }
+    return migrated
 
-def _load_existing_bm25_nodes() -> list:
+
+def _load_manifest() -> dict[str, dict[str, Any]]:
+    """Load manifest; auto-migrate from legacy registry if manifest absent."""
+    if MANIFEST_PATH.exists():
+        try:
+            payload = json.loads(MANIFEST_PATH.read_text())
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+    if REGISTRY_PATH.exists():
+        manifest = _migrate_registry_to_manifest()
+        _save_manifest(manifest)
+        return manifest
+    return {}
+
+
+def _save_manifest(manifest: dict[str, dict[str, Any]]) -> None:
+    """Atomic write via tmp file + os.replace to prevent partial-write corruption."""
+    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = MANIFEST_PATH.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    os.replace(tmp_path, MANIFEST_PATH)
+
+
+def _mark_pending(manifest: dict[str, dict[str, Any]], filename: str) -> None:
+    """Write pending status; increments attempts. Called before processing starts."""
+    previous = manifest.get(filename, {})
+    attempts = int(previous.get("attempts", 0) or 0) + 1
+    manifest[filename] = {
+        "status": "pending",
+        "attempts": attempts,
+        "last_error": None,
+        "chunk_count": None,
+        "updated_at": _utc_now_iso(),
+    }
+
+
+def _mark_success(manifest: dict[str, dict[str, Any]], filename: str, chunk_count: int) -> None:
+    """Write success status with chunk count."""
+    previous = manifest.get(filename, {})
+    manifest[filename] = {
+        "status": "success",
+        "attempts": int(previous.get("attempts", 0) or 0),
+        "last_error": None,
+        "chunk_count": chunk_count,
+        "updated_at": _utc_now_iso(),
+    }
+
+
+def _mark_failed(manifest: dict[str, dict[str, Any]], filename: str, error: str) -> None:
+    """Write failed status with truncated error string."""
+    previous = manifest.get(filename, {})
+    manifest[filename] = {
+        "status": "failed",
+        "attempts": int(previous.get("attempts", 0) or 0),
+        "last_error": (error or "")[:_MAX_ERROR_LEN],
+        "chunk_count": None,
+        "updated_at": _utc_now_iso(),
+    }
+
+
+def _save_chunk_artifact(filename: str, chunks: list[TextNode]) -> None:
+    """Pickle chunks to data/chunks/{stem}.pkl. Creates dir if needed."""
+    CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
+    artifact_path = CHUNKS_DIR / f"{Path(filename).stem}.pkl"
+    payload = {"nodes": chunks, "filename": filename, "chunk_count": len(chunks)}
+    with open(artifact_path, "wb") as f:
+        pickle.dump(payload, f)
+
+
+def _load_existing_bm25_nodes() -> list[TextNode]:
     """Return the raw node list from an existing BM25 pickle, or [] if none."""
     if not BM25_INDEX_PATH.exists():
         return []
     with open(BM25_INDEX_PATH, "rb") as f:
         payload = pickle.load(f)
-    return payload.get("nodes", [])
+    if not isinstance(payload, dict):
+        return []
+    nodes = payload.get("nodes", [])
+    return nodes if isinstance(nodes, list) else []
+
+
+def _load_chunk_artifacts_for_successful_docs(
+    manifest: dict[str, dict[str, Any]],
+    include_filenames: set[str] | None = None,
+) -> list[TextNode]:
+    """Load nodes for successful docs plus explicit filenames.
+    Falls back to the existing BM25 index when a migrated success entry has no artifact.
+    """
+    selected_filenames = {
+        filename
+        for filename, entry in manifest.items()
+        if isinstance(entry, dict) and entry.get("status") == "success"
+    }
+    if include_filenames:
+        selected_filenames.update(include_filenames)
+
+    existing_nodes_by_filename: dict[str, list[TextNode]] = {}
+    for node in _load_existing_bm25_nodes():
+        filename = str(node.metadata.get("filename", ""))
+        if filename:
+            existing_nodes_by_filename.setdefault(filename, []).append(node)
+
+    all_nodes: list[TextNode] = []
+    for filename in sorted(selected_filenames):
+        artifact_path = CHUNKS_DIR / f"{Path(filename).stem}.pkl"
+        if not artifact_path.exists():
+            fallback_nodes = existing_nodes_by_filename.get(filename)
+            if fallback_nodes:
+                all_nodes.extend(fallback_nodes)
+                continue
+            print(f"WARN: missing chunk artifact for successful doc: {filename}")
+            continue
+        with open(artifact_path, "rb") as f:
+            payload = pickle.load(f)
+        nodes = payload.get("nodes", []) if isinstance(payload, dict) else []
+        all_nodes.extend(nodes)
+    return all_nodes
+
+
+def _build_batch(
+    all_specs: list[DocSpec],
+    manifest: dict[str, dict[str, Any]],
+    retry_failed: bool,
+    limit: int | None,
+) -> tuple[list[DocSpec], set[str], set[str]]:
+    success_set = {
+        filename
+        for filename, entry in manifest.items()
+        if isinstance(entry, dict) and entry.get("status") == "success"
+    }
+    failed_set = {
+        filename
+        for filename, entry in manifest.items()
+        if isinstance(entry, dict) and entry.get("status") == "failed"
+    }
+    if retry_failed:
+        queue = {s.path.name for s in all_specs} - success_set
+    else:
+        queue = {s.path.name for s in all_specs} - success_set - failed_set
+    batch = [s for s in all_specs if s.path.name in queue]
+    if limit is not None:
+        batch = batch[:limit]
+    return batch, success_set, failed_set
 
 
 # ---------------------------------------------------------------------------
@@ -154,13 +306,69 @@ def parse_document(spec: DocSpec) -> list:
     return enriched
 
 
+def _parse_batch(
+    batch: list[DocSpec],
+    manifest: dict[str, dict[str, Any]],
+    workers: int,
+    continue_on_error: bool,
+) -> tuple[dict[str, list], bool]:
+    parsed_by_filename: dict[str, list] = {}
+    parse_failed = False
+
+    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init) as pool:
+        future_to_spec = {}
+        for spec in batch:
+            _mark_pending(manifest, spec.path.name)
+            _save_manifest(manifest)
+            future_to_spec[pool.submit(parse_document, spec)] = spec
+
+        for future in as_completed(future_to_spec):
+            spec = future_to_spec[future]
+            try:
+                parsed_by_filename[spec.path.name] = future.result()
+            except Exception as exc:
+                _mark_failed(manifest, spec.path.name, f"{type(exc).__name__}: {exc}")
+                _save_manifest(manifest)
+                parse_failed = True
+                if not continue_on_error:
+                    for pending_future in future_to_spec:
+                        if pending_future is not future:
+                            pending_future.cancel()
+                    break
+
+    return parsed_by_filename, parse_failed
+
+
+def _rebuild_bm25_for_indexed_docs(
+    manifest: dict[str, dict[str, Any]],
+    indexed_chunk_counts: dict[str, int],
+) -> list[TextNode]:
+    all_bm25_nodes = _load_chunk_artifacts_for_successful_docs(
+        manifest,
+        include_filenames=set(indexed_chunk_counts),
+    )
+    if not all_bm25_nodes:
+        if indexed_chunk_counts:
+            raise RuntimeError("No BM25 nodes available for successfully indexed documents.")
+        print("WARN: no successful docs with chunk artifacts — BM25 index not written.")
+        return []
+
+    print(f"Building BM25 index from {len(all_bm25_nodes)} artifact nodes -> {BM25_INDEX_PATH} ...")
+    build_bm25_index(all_bm25_nodes, output_path=BM25_INDEX_PATH)
+
+    for filename, chunk_count in indexed_chunk_counts.items():
+        _mark_success(manifest, filename, chunk_count=chunk_count)
+    if indexed_chunk_counts:
+        _save_manifest(manifest)
+
+    return all_bm25_nodes
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    from concurrent.futures import ProcessPoolExecutor
-
     parser = argparse.ArgumentParser(description="FinLens incremental ingestion pipeline")
     parser.add_argument(
         "--limit",
@@ -174,19 +382,43 @@ def main() -> None:
         action="store_true",
         help="Print ingestion status and exit without ingesting",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Number of worker processes used for parsing (default: 4)",
+    )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Re-queue documents marked failed in the manifest",
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue the batch when a single document fails",
+    )
     args = parser.parse_args()
 
-    # Discover all PDFs and load registry
+    # Discover all PDFs and load manifest
     all_specs = _discover_pdfs()
-    already_ingested = _load_registry()
-
-    pending = [s for s in all_specs if s.path.name not in already_ingested]
-    batch = pending if args.limit is None else pending[: args.limit]
+    manifest = _load_manifest()
+    batch, success_set, failed_set = _build_batch(
+        all_specs=all_specs,
+        manifest=manifest,
+        retry_failed=args.retry_failed,
+        limit=args.limit,
+    )
+    pending = [
+        s for s in all_specs if s.path.name not in success_set and s.path.name not in failed_set
+    ]
 
     if args.list:
         print(f"Ingestion status:")
         print(f"  Total PDFs found : {len(all_specs)}")
-        print(f"  Already ingested : {len(already_ingested)}")
+        print(f"  Successful       : {len(success_set)}")
+        print(f"  Failed           : {len(failed_set)}")
         print(f"  Pending          : {len(pending)}")
         if batch:
             print(f"\nNext {len(batch)} doc(s) to ingest:")
@@ -195,10 +427,14 @@ def main() -> None:
         return
 
     if not batch:
-        print("Nothing to ingest — all discovered PDFs are already in the registry.")
+        print("Nothing to ingest — all discovered PDFs are already successful in the manifest.")
         return
 
-    print(f"Ingesting {len(batch)} document(s) ({len(already_ingested)} already done, {len(pending) - len(batch)} remaining after this batch) ...")
+    print(
+        f"Ingesting {len(batch)} document(s) "
+        f"({len(success_set)} successful, {len(failed_set)} failed, "
+        f"{max(len(pending) - len(batch), 0)} remaining after this batch) ..."
+    )
 
     # Ensure Qdrant collection exists (idempotent)
     try:
@@ -209,46 +445,73 @@ def main() -> None:
 
     # Phase 1: parse all docs in batch in parallel (Docling is the biggest bottleneck)
     print("\nPhase 1/3 — Parsing documents in parallel (OCR disabled) ...")
-    with ProcessPoolExecutor(max_workers=4, initializer=_worker_init) as pool:
-        all_enriched = list(pool.map(parse_document, batch))
-
-    # Phase 2: chunk sequentially
-    print("\nPhase 2/3 — Chunking ...")
-    new_chunks: list = []
-    for spec, enriched in zip(batch, all_enriched):
-        if not enriched:
-            continue
-        print(f"  Chunking {spec.path.name} ({len(enriched)} nodes) ...")
-        chunks = split_paragraph_nodes(enriched)
-        assert_node_metadata(chunks)
-        print(f"    -> {len(chunks)} chunks")
-        new_chunks.extend(chunks)
-
-    if not new_chunks:
-        print("\nNo chunks produced — check that PDF files exist in the configured paths.")
+    parsed_by_filename, parse_failed = _parse_batch(
+        batch=batch,
+        manifest=manifest,
+        workers=args.workers,
+        continue_on_error=args.continue_on_error,
+    )
+    if parse_failed and not args.continue_on_error:
         sys.exit(1)
 
-    print(f"\nNew chunks from this batch: {len(new_chunks)}")
+    # Phase 2: chunk sequentially per document
+    print("\nPhase 2/3 — Chunking ...")
+    per_doc_chunks: dict[str, list[TextNode]] = {}
+    for spec in batch:
+        filename = spec.path.name
+        if filename not in parsed_by_filename:
+            continue
+        enriched = parsed_by_filename[filename]
 
-    # Phase 3: index
+        if not enriched:
+            _mark_failed(manifest, filename, "parse_document returned 0 nodes")
+            _save_manifest(manifest)
+            if not args.continue_on_error:
+                sys.exit(1)
+            continue
+        try:
+            print(f"  Chunking {filename} ({len(enriched)} nodes) ...")
+            chunks = split_paragraph_nodes(enriched)
+            assert_node_metadata(chunks)
+            _save_chunk_artifact(filename, chunks)
+            per_doc_chunks[filename] = chunks
+            print(f"    -> {len(chunks)} chunks")
+        except Exception as exc:
+            _mark_failed(manifest, filename, str(exc))
+            _save_manifest(manifest)
+            if not args.continue_on_error:
+                sys.exit(1)
+
+    if not per_doc_chunks:
+        print("\nNo chunks produced for this batch.")
+        if not args.continue_on_error:
+            sys.exit(1)
+
+    print(f"\nDocs with chunks from this batch: {len(per_doc_chunks)}")
+
+    # Phase 3: Qdrant upsert per document
     print("\nPhase 3/3 — Indexing ...")
+    indexed_chunk_counts: dict[str, int] = {}
+    for filename, chunks in per_doc_chunks.items():
+        try:
+            print(f"  Upserting {filename} -> Qdrant ({len(chunks)} chunks) ...")
+            build_qdrant_index(chunks, collection_name=QDRANT_COLLECTION)
+            indexed_chunk_counts[filename] = len(chunks)
+        except Exception as exc:
+            _mark_failed(manifest, filename, str(exc))
+            _save_manifest(manifest)
+            if not args.continue_on_error:
+                raise
 
-    print("Building Qdrant index ...")
-    build_qdrant_index(new_chunks, collection_name=QDRANT_COLLECTION)
-
-    existing_nodes = _load_existing_bm25_nodes()
-    all_bm25_nodes = existing_nodes + new_chunks
-    print(f"Building BM25 index ({len(existing_nodes)} existing + {len(new_chunks)} new = {len(all_bm25_nodes)} total) -> {BM25_INDEX_PATH} ...")
-    build_bm25_index(all_bm25_nodes, output_path=BM25_INDEX_PATH)
-
-    # Persist registry only after successful indexing
-    newly_ingested = {spec.path.name for spec in batch}
-    _save_registry(already_ingested | newly_ingested)
+    all_bm25_nodes = _rebuild_bm25_for_indexed_docs(
+        manifest=manifest,
+        indexed_chunk_counts=indexed_chunk_counts,
+    )
 
     print("\nIngestion complete.")
     print(f"  Qdrant collection : {QDRANT_COLLECTION}  (verify at http://localhost:6333/dashboard)")
     print(f"  BM25 index        : {BM25_INDEX_PATH}  ({len(all_bm25_nodes)} nodes total)")
-    print(f"  Registry          : {REGISTRY_PATH}  ({len(already_ingested | newly_ingested)} ingested)")
+    print(f"  Manifest          : {MANIFEST_PATH}  ({len(manifest)} tracked)")
 
 
 if __name__ == "__main__":
