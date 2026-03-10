@@ -14,6 +14,7 @@ dependencies = [
     # --- BM25 ---
     "llama-index-retrievers-bm25>=0.5.0",
     # --- reranking ---
+    "torch",
     "sentence-transformers>=3.4.1",
     # --- LLM ---
     "litellm>=1.69.0",
