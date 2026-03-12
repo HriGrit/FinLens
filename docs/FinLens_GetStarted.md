@@ -29,11 +29,13 @@ You have five external dependencies that are not in your control. Every one of t
 Docling is the entire foundation of your ingestion quality story. Before you build a single integration:
 
 **What to do:**
+
 ```bash
 pip install docling
 ```
 
 Then write a standalone 30-line script:
+
 ```python
 from docling.document_converter import DocumentConverter
 
@@ -53,6 +55,7 @@ if tables:
 ```
 
 **What you're verifying:**
+
 - Does Docling actually detect tables as `label="table"` or does it flatten them to text?
 - Are page numbers populated on every element's `.prov[0].page_num`?
 - Are footnotes preserved and linked?
@@ -69,6 +72,7 @@ if tables:
 Docling working in isolation is one thing. Docling producing output that LlamaIndex can ingest as proper `Document` nodes is another.
 
 **What to do:**
+
 ```bash
 pip install llama-index llama-index-readers-docling
 ```
@@ -87,6 +91,7 @@ for doc in documents[:3]:
 ```
 
 **What you're verifying:**
+
 - Does the reader produce one `Document` per element, or one `Document` per page, or one per file?
 - Is the metadata (`page_number`, `element_type`, `source_file`) populated on each node?
 - Is the text coherent or is it garbage?
@@ -121,6 +126,7 @@ for node in nodes[:5]:
 ```
 
 **What you're verifying:**
+
 - Are chunks semantically coherent? Does a table stay in one chunk or get split across two?
 - Are the metadata fields (`page_number`, `element_type`) still present after splitting?
 - What's the average chunk length? (too short = noisy retrieval; too long = loses precision)
@@ -185,6 +191,7 @@ print(results)
 ```
 
 **What you're verifying:**
+
 - Qdrant starts and is accessible
 - Your metadata schema inserts and is queryable
 - Payload filter syntax works as expected
@@ -212,6 +219,7 @@ print(f"Tokens used: {response.usage}")
 ```
 
 **What you're verifying:**
+
 - Your API key works
 - The model name format for OpenRouter via LiteLLM (`openrouter/` prefix)
 - Streaming works (test with `stream=True` and iterate `response` as a generator)
@@ -245,6 +253,7 @@ for score, text in ranked:
 ```
 
 **What you're verifying:**
+
 - The model downloads and loads correctly (~85MB)
 - The scoring is intuitive — the most relevant chunk should rank highest
 - Inference latency for 10 pairs (your production load per query)
@@ -323,6 +332,7 @@ uv add \
 ```
 
 **Lock immediately:**
+
 ```bash
 uv lock
 ```
@@ -568,6 +578,7 @@ def retrieve_with_filters(retriever, query: str, company: str = None, year: str 
 ```
 
 **Run a test query immediately:**
+
 ```python
 results = retrieve_with_filters(retriever, "What was total revenue?", company="AAPL", year="2022")
 for r in results:
@@ -787,6 +798,7 @@ def trace_pipeline(query: str, company: str, year: str):
 ### 5.3 — Instrument the Pipeline
 
 Add spans to each step. The key steps to instrument are:
+
 - `hybrid_retrieval` — log number of candidates returned, latency
 - `cross_encoder_rerank` — log scores per chunk, which 3 were selected
 - `llm_generation` — log prompt, response, token count, cost
@@ -828,6 +840,7 @@ def health():
 ```
 
 Test with `curl` before touching the frontend:
+
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
@@ -907,6 +920,7 @@ Don't design the frontend until the backend is working. Many engineers waste two
 ## Phase 9 — GitHub Actions CI Gate
 
 Only write the CI workflow after you have:
+
 - A working eval script that runs locally
 - Langfuse receiving eval scores
 - A known baseline score to compare against
@@ -951,18 +965,21 @@ jobs:
 Before writing any application code, you should be able to check every box:
 
 **Data:**
+
 - [ ] FinanceBench PDFs downloaded and stored in `data/financebench/`
 - [ ] You've opened 3 real PDFs and confirmed they have the table/footnote structure you expect
 - [ ] FinDER dataset loads via `load_dataset("Linq-AI-Research/FinDER")` without error
 - [ ] You've spot-checked 10 FinDER questions and confirmed their source companies exist in your FinanceBench corpus
 
 **Models:**
+
 - [ ] Docling parses a real 10-K and produces typed elements with page numbers
 - [ ] `bge-large-en-v1.5` loads locally, produces 1024-dim vectors
 - [ ] `cross-encoder/ms-marco-MiniLM-L-6-v2` loads locally, ranks a test pair correctly
 - [ ] LiteLLM → OpenRouter → Mistral returns a response with correct token tracking
 
 **Infrastructure:**
+
 - [ ] `docker compose up -d` starts Qdrant and Langfuse cleanly
 - [ ] Qdrant dashboard accessible at `:6333/dashboard`
 - [ ] Langfuse UI accessible at `:3000`
@@ -970,6 +987,7 @@ Before writing any application code, you should be able to check every box:
 - [ ] OpenRouter key active with available balance
 
 **Code:**
+
 - [ ] `uv lock` file committed
 - [ ] `.env.example` with all required environment variable names (never commit actual keys)
 - [ ] `.gitignore` includes `data/financebench/` (PDFs are large), `.env`, `__pycache__/`
@@ -983,6 +1001,7 @@ Run this question through your pipeline once you have the ingestion done:
 > "What was Apple's total net revenue for fiscal year 2022, and how did it compare to fiscal year 2021?"
 
 This question requires your system to:
+
 - Retrieve the right table (not just any revenue mention)
 - Handle cross-year comparison (tests metadata filtering)
 - Return an exact number, not a paraphrase (tests hallucination resistance)
