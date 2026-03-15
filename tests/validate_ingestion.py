@@ -4,13 +4,13 @@ Post-ingestion smoke test — validates Qdrant collection + BM25 index after run
 Run with: cd backend && uv run python ../tests/validate_ingestion.py
 Requires: run_ingestion.py completed successfully, Qdrant running on localhost:6333.
 """
-import pickle
 import sys
 from pathlib import Path
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 from ingestion.embed import get_embed_model
+from ingestion.index import load_bm25_index  # X1: use the official load function
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTION = "finlens_chunks_dev"
@@ -51,9 +51,10 @@ for point in results.points:
 print(f"[PASS] All 6 required metadata fields present on sampled points.")
 
 # --- 4. BM25 index ---
+# X1: Use load_bm25_index() instead of pickle.load() directly so the versioned
+#     serialization contract is respected and the retriever is properly reconstructed.
 assert BM25_PATH.exists(), f"BM25 index not found at {BM25_PATH}"
-with open(BM25_PATH, "rb") as f:
-    bm25 = pickle.load(f)
+bm25 = load_bm25_index(BM25_PATH)
 bm25_results = bm25.retrieve("net sales revenue")
 assert len(bm25_results) > 0, "BM25 retrieve returned 0 results"
 print(f"[PASS] BM25 index loaded from {BM25_PATH}, returned {len(bm25_results)} result(s) for test query.")
@@ -62,5 +63,5 @@ print(f"[PASS] BM25 index loaded from {BM25_PATH}, returned {len(bm25_results)} 
 print(f"\n--- Ingestion Validation Summary ---")
 print(f"  Collection  : {COLLECTION}")
 print(f"  Point count : {point_count}")
-print(f"  BM25 nodes  : {len(bm25.index._index) if hasattr(bm25, 'index') else 'n/a'}")
+print(f"  BM25 nodes  : n/a (retriever object)")
 print(f"\nAll checks passed.")

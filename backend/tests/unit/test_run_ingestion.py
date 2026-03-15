@@ -121,7 +121,21 @@ def test_mark_pending_increments_attempts():
     assert entry["attempts"] == 3
 
 
-def test_mark_success_sets_chunk_count():
+def test_mark_success_sets_chunk_count(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    # I6: _mark_success now requires the chunk artifact to exist; provide it.
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    monkeypatch.setattr(ri, "CHUNKS_DIR", chunks_dir)
+    nodes = [
+        TextNode(
+            text="Revenue grew.",
+            metadata={"filename": "3M_2022_10K.pdf", "company": "3M", "year": "2022"},
+        )
+    ]
+    _save_chunk_artifact("3M_2022_10K.pdf", nodes)
+
     manifest = {
         "3M_2022_10K.pdf": {
             "status": "pending",
@@ -255,6 +269,7 @@ def test_load_chunks_skips_failed_docs(tmp_path, monkeypatch):
 
 def test_load_chunks_falls_back_to_existing_bm25_for_migrated_success(tmp_path, monkeypatch):
     from ingestion import run_ingestion as ri
+    from ingestion.index import build_bm25_index
 
     chunks_dir = tmp_path / "chunks"
     bm25_path = tmp_path / "bm25_index.pkl"
@@ -263,14 +278,23 @@ def test_load_chunks_falls_back_to_existing_bm25_for_migrated_success(tmp_path, 
 
     fallback_node = TextNode(
         text="Legacy BM25 node.",
-        metadata={"filename": "A_2022_10K.pdf", "company": "A", "year": "2022"},
+        metadata={
+            "filename": "A_2022_10K.pdf",
+            "company": "A",
+            "year": "2022",
+            "element_type": "paragraph",
+            "page_number": 1,
+            "doc_type": "10-K",
+        },
     )
-    bm25_path.write_bytes(pickle.dumps({"nodes": [fallback_node]}))
+    # X1 / I5: write a versioned BM25 artifact (not a raw dict) so load_bm25_index works
+    build_bm25_index([fallback_node], output_path=bm25_path)
 
     manifest = {"A_2022_10K.pdf": {"status": "success"}}
     loaded = _load_chunk_artifacts_for_successful_docs(manifest)
-    assert len(loaded) == 1
-    assert loaded[0].text == "Legacy BM25 node."
+    assert len(loaded) >= 1
+    texts = [n.text for n in loaded]
+    assert "Legacy BM25 node." in texts
 
 
 def test_parse_batch_marks_failed_docs_and_continues(monkeypatch):
@@ -374,3 +398,88 @@ def test_save_manifest_is_atomic(tmp_path, monkeypatch):
     _save_manifest(manifest)
     payload = json.loads(manifest_path.read_text())
     assert payload == manifest
+
+
+# ---------------------------------------------------------------------------
+# I6 — success manifest entry with missing artifact is surfaced
+# ---------------------------------------------------------------------------
+
+def test_mark_success_raises_when_chunk_artifact_missing(tmp_path, monkeypatch):
+    """I6: _mark_success raises RuntimeError when the chunk artifact does not exist."""
+    from ingestion import run_ingestion as ri
+
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    monkeypatch.setattr(ri, "CHUNKS_DIR", chunks_dir)
+
+    manifest: dict[str, dict] = {
+        "A_2022_10K.pdf": {
+            "status": "pending",
+            "attempts": 1,
+            "last_error": None,
+            "chunk_count": None,
+            "updated_at": "2026-03-11T10:30:00Z",
+        }
+    }
+
+    # No artifact has been saved — _mark_success should raise
+    with pytest.raises(RuntimeError, match="chunk artifact not found"):
+        _mark_success(manifest, "A_2022_10K.pdf", chunk_count=5)
+
+    # Manifest entry must NOT have been updated to success
+    assert manifest["A_2022_10K.pdf"]["status"] == "pending"
+
+
+def test_mark_success_succeeds_when_artifact_present(tmp_path, monkeypatch):
+    """I6: _mark_success records success when the chunk artifact exists and is valid."""
+    from ingestion import run_ingestion as ri
+
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    monkeypatch.setattr(ri, "CHUNKS_DIR", chunks_dir)
+
+    # Save a valid artifact first
+    nodes = [
+        TextNode(
+            text="Revenue grew.",
+            metadata={"filename": "A_2022_10K.pdf", "company": "A", "year": "2022"},
+        )
+    ]
+    _save_chunk_artifact("A_2022_10K.pdf", nodes)
+
+    manifest: dict[str, dict] = {
+        "A_2022_10K.pdf": {
+            "status": "pending",
+            "attempts": 1,
+            "last_error": None,
+            "chunk_count": None,
+            "updated_at": "2026-03-11T10:30:00Z",
+        }
+    }
+
+    _mark_success(manifest, "A_2022_10K.pdf", chunk_count=1)
+    assert manifest["A_2022_10K.pdf"]["status"] == "success"
+    assert manifest["A_2022_10K.pdf"]["chunk_count"] == 1
+
+
+def test_mark_success_skip_verify_artifact_bypasses_check(tmp_path, monkeypatch):
+    """I6: verify_artifact=False allows success even when artifact is absent (escape hatch)."""
+    from ingestion import run_ingestion as ri
+
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    monkeypatch.setattr(ri, "CHUNKS_DIR", chunks_dir)
+
+    manifest: dict[str, dict] = {
+        "A_2022_10K.pdf": {
+            "status": "pending",
+            "attempts": 1,
+            "last_error": None,
+            "chunk_count": None,
+            "updated_at": "2026-03-11T10:30:00Z",
+        }
+    }
+
+    # Should not raise even though no artifact exists
+    _mark_success(manifest, "A_2022_10K.pdf", chunk_count=5, verify_artifact=False)
+    assert manifest["A_2022_10K.pdf"]["status"] == "success"

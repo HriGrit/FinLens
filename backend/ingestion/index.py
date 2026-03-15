@@ -12,6 +12,9 @@ from llama_index.core.schema import TextNode
 from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 
 
+_POINT_ID_FIELDS = ("filename", "company", "year", "doc_type", "page_number", "element_type")
+
+
 def _make_point_id(
     filename: str,
     page_number: str | int,
@@ -21,6 +24,16 @@ def _make_point_id(
 ) -> str:
     key = f"{filename}:{page_number}:{element_type}:{chunk_index}:{text}"
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
+
+
+def _validate_point_id_fields(node: "TextNode", node_index: int) -> None:
+    """Q3: Assert all fields used in point ID construction are non-None."""
+    null_fields = [f for f in _POINT_ID_FIELDS if node.metadata.get(f) is None]
+    if null_fields:
+        raise ValueError(
+            f"Node {node_index} has None value(s) for point-ID fields: {null_fields}. "
+            "Deterministic point IDs cannot be built with None metadata."
+        )
 
 
 def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLLECTION) -> None:
@@ -58,7 +71,16 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
     print(f"Embedding {len(nodes)} nodes ...")
     embeddings = embed_model.get_text_embedding_batch(texts, show_progress=True)
 
-    for node, embedding in zip(nodes, embeddings):
+    # Q2: Validate embedding batch length before zip
+    if len(embeddings) != len(nodes):
+        raise ValueError(
+            f"Embedding batch length mismatch: expected {len(nodes)} embeddings "
+            f"for {len(nodes)} nodes, got {len(embeddings)}."
+        )
+
+    for node_index, (node, embedding) in enumerate(zip(nodes, embeddings)):
+        # Q3: Validate that all point-ID fields are non-None before constructing the ID
+        _validate_point_id_fields(node, node_index)
         payload = {
             "text": node.text,
             **node.metadata,
@@ -80,13 +102,29 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
     batch_size = 100
     for i in range(0, len(points), batch_size):
         batch = points[i : i + batch_size]
-        client.upsert(collection_name=collection_name, points=batch)
+        # Q1: Check upsert status and raise if not completed
+        result = client.upsert(collection_name=collection_name, points=batch)
+        status = getattr(result, "status", None)
+        if status is not None:
+            status_name = getattr(status, "value", str(status)).lower()
+            if status_name != "completed":
+                raise RuntimeError(
+                    f"Qdrant upsert did not complete successfully: status={status!r} "
+                    f"(batch starting at index {i})"
+                )
 
     print(f"Upserted {len(points)} points into '{collection_name}'.")
 
 
+_BM25_FORMAT_VERSION = "v1"
+
+
 def build_bm25_index(nodes: list[TextNode], output_path: str | Path = "data/bm25_index.pkl") -> None:
-    """Build BM25 index from nodes and persist to disk as a pickle file."""
+    """Build BM25 index from nodes and persist to disk as a versioned pickle file.
+
+    I5: The artifact is saved as a dict with an explicit 'version' key so that
+    load_bm25_index can verify the format before reconstruction.
+    """
     from llama_index.retrievers.bm25 import BM25Retriever
 
     output_path = Path(output_path)
@@ -94,6 +132,7 @@ def build_bm25_index(nodes: list[TextNode], output_path: str | Path = "data/bm25
 
     retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=10)
     payload: dict[str, Any] = {
+        "version": _BM25_FORMAT_VERSION,
         "nodes": nodes,
         "similarity_top_k": retriever.similarity_top_k,
         "skip_stemming": retriever.skip_stemming,
@@ -108,14 +147,30 @@ def build_bm25_index(nodes: list[TextNode], output_path: str | Path = "data/bm25
 
 
 def load_bm25_index(index_path: str | Path = "data/bm25_index.pkl") -> "BM25Retriever":
-    """Load a previously persisted BM25Retriever from disk."""
+    """Load a previously persisted BM25Retriever from disk.
+
+    I5: Checks the 'version' key and raises ValueError for unrecognized versions.
+    """
     from llama_index.retrievers.bm25 import BM25Retriever  # noqa: F401
 
     with open(index_path, "rb") as f:
         payload = pickle.load(f)
 
-    if not isinstance(payload, dict) or "nodes" not in payload:
-        raise ValueError("Invalid BM25 index payload. Rebuild the index.")
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Invalid BM25 index payload: expected a dict, got {type(payload).__name__}. "
+            "Rebuild the index."
+        )
+
+    version = payload.get("version")
+    if version != _BM25_FORMAT_VERSION:
+        raise ValueError(
+            f"Unrecognized BM25 index version: {version!r}. "
+            f"Expected {_BM25_FORMAT_VERSION!r}. Rebuild the index."
+        )
+
+    if "nodes" not in payload:
+        raise ValueError("Invalid BM25 index payload: missing 'nodes' key. Rebuild the index.")
 
     return BM25Retriever.from_defaults(
         nodes=payload["nodes"],

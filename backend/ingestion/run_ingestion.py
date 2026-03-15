@@ -137,8 +137,33 @@ def _mark_pending(manifest: dict[str, dict[str, Any]], filename: str) -> None:
     }
 
 
-def _mark_success(manifest: dict[str, dict[str, Any]], filename: str, chunk_count: int) -> None:
-    """Write success status with chunk count."""
+def _mark_success(
+    manifest: dict[str, dict[str, Any]],
+    filename: str,
+    chunk_count: int,
+    *,
+    verify_artifact: bool = True,
+) -> None:
+    """Write success status with chunk count.
+
+    I6: When verify_artifact=True (default), asserts that the chunk artifact file
+    exists and is readable before recording success. Raises RuntimeError if not.
+    """
+    if verify_artifact:
+        artifact_path = CHUNKS_DIR / f"{Path(filename).stem}.pkl"
+        if not artifact_path.exists():
+            raise RuntimeError(
+                f"I6: Cannot mark {filename!r} as success — chunk artifact not found at "
+                f"{artifact_path}. Ingestion may be incomplete."
+            )
+        try:
+            with open(artifact_path, "rb") as _fh:
+                pickle.load(_fh)
+        except Exception as exc:
+            raise RuntimeError(
+                f"I6: Chunk artifact for {filename!r} exists but is not readable: {exc}"
+            ) from exc
+
     previous = manifest.get(filename, {})
     manifest[filename] = {
         "status": "success",
@@ -171,15 +196,31 @@ def _save_chunk_artifact(filename: str, chunks: list[TextNode]) -> None:
 
 
 def _load_existing_bm25_nodes() -> list[TextNode]:
-    """Return the raw node list from an existing BM25 pickle, or [] if none."""
+    """Return the raw node list from an existing BM25 pickle, or [] if none.
+
+    X1: Uses load_bm25_index() to respect the versioned serialization contract,
+    then extracts the underlying node corpus for re-use.
+    """
     if not BM25_INDEX_PATH.exists():
         return []
-    with open(BM25_INDEX_PATH, "rb") as f:
-        payload = pickle.load(f)
-    if not isinstance(payload, dict):
+    try:
+        from .index import load_bm25_index
+        retriever = load_bm25_index(BM25_INDEX_PATH)
+        # BM25Retriever stores the original nodes in .index.corpus or can be
+        # accessed via the private _nodes attribute; fall back to pickle direct read
+        # for the corpus only when needed.
+        nodes = getattr(retriever, "_nodes", None)
+        if nodes is not None and isinstance(nodes, list):
+            return nodes
+        # Fallback: reload the payload dict directly to extract the node corpus
+        with open(BM25_INDEX_PATH, "rb") as f:
+            payload = pickle.load(f)
+        if not isinstance(payload, dict):
+            return []
+        raw_nodes = payload.get("nodes", [])
+        return raw_nodes if isinstance(raw_nodes, list) else []
+    except Exception:
         return []
-    nodes = payload.get("nodes", [])
-    return nodes if isinstance(nodes, list) else []
 
 
 def _load_chunk_artifacts_for_successful_docs(
