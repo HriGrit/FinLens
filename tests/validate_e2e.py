@@ -87,7 +87,7 @@ def run_test(test: dict) -> dict:
     # ── 1. RETRIEVE + RERANK ─────────────────────────────────────────────────
     sep("1 · HYBRID RETRIEVE + RERANK")
     t0 = time.perf_counter()
-    nodes = retrieve_and_rerank(
+    retrieval = retrieve_and_rerank(
         query=query,
         retrieval_top_k=retrieval_top_k,
         rerank_top_k=rerank_top_k,
@@ -95,9 +95,13 @@ def run_test(test: dict) -> dict:
         year=year,
         trace=None,
     )
+    nodes = retrieval.nodes
     retrieve_ms = (time.perf_counter() - t0) * 1000
 
-    print(f"Returned {len(nodes)} node(s) in {retrieve_ms:.0f} ms")
+    print(
+        f"Returned {len(nodes)} node(s) in {retrieve_ms:.0f} ms "
+        f"(candidates={retrieval.candidate_count})"
+    )
     if not nodes:
         print("FAIL: 0 nodes returned — check Qdrant collection and BM25 index.")
         return {"label": label, "pass": False, "error": "0 nodes"}
@@ -133,7 +137,8 @@ def run_test(test: dict) -> dict:
         f"completion={u['completion_tokens']}  "
         f"total={u['total_tokens']}"
     )
-    print(f"Cost    : ${u['cost_usd']:.6f}  |  Latency: {gen_ms:.0f} ms")
+    cost_str = f"${u['cost_usd']:.6f}" if u["cost_usd"] is not None else "unknown"
+    print(f"Cost    : {cost_str}  |  Latency: {gen_ms:.0f} ms")
 
     # ── 3. ANSWER ─────────────────────────────────────────────────────────────
     sep("3 · ANSWER")

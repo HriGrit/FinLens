@@ -22,7 +22,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
-from generation.generate import DEFAULT_MODEL, generate, register_langfuse_callbacks
+from generation.generate import (
+    DEFAULT_MODEL,
+    MalformedGenerationResponseError,
+    generate,
+    register_langfuse_callbacks,
+)
 from generation.openrouter_models import get_free_models
 from ingestion.discovery import discover_pdfs
 from observability.tracing import create_trace
@@ -86,8 +91,8 @@ class ChatRequest(BaseModel):
     company: str | None = None
     year: str | None = None
     model: str | None = None
-    retrieval_top_k: int = 20
-    rerank_top_k: int = 5
+    retrieval_top_k: int = Field(default=20, gt=0)
+    rerank_top_k: int = Field(default=5, gt=0)
 
     @field_validator("query", mode="before")
     @classmethod
@@ -131,14 +136,18 @@ def chat(request: ChatRequest) -> ChatResponse:
     )
     retrieval_ms_start = time.perf_counter()
 
-    nodes, n_candidates = retrieve_and_rerank(
-        query=request.query,
-        retrieval_top_k=request.retrieval_top_k,
-        rerank_top_k=request.rerank_top_k,
-        company=request.company,
-        year=request.year,
-        trace=trace,
-    )
+    try:
+        retrieval_result = retrieve_and_rerank(
+            query=request.query,
+            retrieval_top_k=request.retrieval_top_k,
+            rerank_top_k=request.rerank_top_k,
+            company=request.company,
+            year=request.year,
+            trace=trace,
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Retrieval backend failure.")
+    nodes = retrieval_result.nodes
     retrieval_ms = int((time.perf_counter() - retrieval_ms_start) * 1000)
 
     if not nodes:
@@ -152,8 +161,12 @@ def chat(request: ChatRequest) -> ChatResponse:
             model=request.model or DEFAULT_MODEL,
             trace=trace,
         )
+    except MalformedGenerationResponseError:
+        raise HTTPException(status_code=502, detail="Malformed upstream generation response.")
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Generation backend failure.")
     generation_ms = int((time.perf_counter() - generation_ms_start) * 1000)
 
     reasoning = _build_reasoning(
@@ -161,7 +174,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         trace_id=trace.id,
         request=request,
         context_nodes=nodes,
-        n_candidates=n_candidates,
+        n_candidates=retrieval_result.candidate_count,
         generation_model=result["model"],
         usage=result["usage"],
         retrieval_ms=retrieval_ms,

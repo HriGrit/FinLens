@@ -26,6 +26,13 @@ def test_fuse_results_deduplicates_by_text_and_prefers_dense_metadata_when_dupli
     assert fused[0].metadata["source"] == "dense"
 
 
+def test_duplicate_policy_is_explicitly_dense_preferred():
+    assert hybrid._prefer_incoming_node(existing_source="bm25", incoming_source="dense")
+    assert not hybrid._prefer_incoming_node(existing_source="dense", incoming_source="bm25")
+    assert not hybrid._prefer_incoming_node(existing_source="dense", incoming_source="dense")
+    assert not hybrid._prefer_incoming_node(existing_source="bm25", incoming_source="bm25")
+
+
 def test_fuse_results_respects_rank_weighting():
     bm25_nodes = [
         _node("A", "bm25"),

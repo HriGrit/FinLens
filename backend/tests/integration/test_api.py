@@ -4,9 +4,11 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from llama_index.core.schema import TextNode
+from generation.generate import MalformedGenerationResponseError
 from generation.openrouter_models import FreeModelOption
 
 from api.main import app
+from retrieval.pipeline import RetrievalResult
 
 
 class _FakeAsyncResponse:
@@ -55,8 +57,8 @@ def test_free_models_endpoint_returns_model_options(monkeypatch):
 @pytest.mark.integration
 def test_chat_endpoint_routes_retrieve_and_generate(monkeypatch):
     def _nodes(*args, **kwargs):
-        return (
-            [
+        return RetrievalResult(
+            nodes=[
                 TextNode(
                     text="3M reported net sales of $35.4 billion.",
                     metadata={
@@ -68,7 +70,7 @@ def test_chat_endpoint_routes_retrieve_and_generate(monkeypatch):
                     },
                 ),
             ],
-            1,
+            candidate_count=1,
         )
 
     def _response(*args, **kwargs):
@@ -109,7 +111,10 @@ def test_chat_endpoint_routes_retrieve_and_generate(monkeypatch):
 
 @pytest.mark.integration
 def test_chat_endpoint_returns_not_found_when_no_nodes(monkeypatch):
-    monkeypatch.setattr("api.main.retrieve_and_rerank", lambda **kwargs: ([], 0))
+    monkeypatch.setattr(
+        "api.main.retrieve_and_rerank",
+        lambda **kwargs: RetrievalResult(nodes=[], candidate_count=0),
+    )
 
     with TestClient(app) as client:
         response = client.post("/chat", json={"query": "No match"})
@@ -121,8 +126,8 @@ def test_chat_endpoint_returns_not_found_when_no_nodes(monkeypatch):
 @pytest.mark.integration
 def test_chat_returns_502_when_model_returns_empty(monkeypatch):
     def _nodes(*args, **kwargs):
-        return (
-            [
+        return RetrievalResult(
+            nodes=[
                 TextNode(
                     text="3M reported net sales of $35.4 billion.",
                     metadata={
@@ -134,7 +139,7 @@ def test_chat_returns_502_when_model_returns_empty(monkeypatch):
                     },
                 )
             ],
-            1,
+            candidate_count=1,
         )
 
     monkeypatch.setattr("api.main.retrieve_and_rerank", _nodes)
@@ -181,8 +186,8 @@ def test_chat_rejects_oversized_query():
 @pytest.mark.integration
 def test_reasoning_retrieved_candidates_reflect_pre_rerank_count(monkeypatch):
     def _nodes(*args, **kwargs):
-        return (
-            [
+        return RetrievalResult(
+            nodes=[
                 TextNode(
                     text="3M reported net sales of $35.4 billion.",
                     metadata={
@@ -194,7 +199,7 @@ def test_reasoning_retrieved_candidates_reflect_pre_rerank_count(monkeypatch):
                     },
                 )
             ],
-            20,
+            candidate_count=20,
         )
 
     monkeypatch.setattr(
@@ -382,3 +387,69 @@ def test_ingestion_status_response_contains_no_localhost(monkeypatch, tmp_path):
     body_text = response.text
     assert "localhost" not in body_text
     assert "127.0.0.1" not in body_text
+
+
+@pytest.mark.integration
+def test_chat_rejects_nonpositive_retrieval_top_k():
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"query": "test", "retrieval_top_k": 0})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.integration
+def test_chat_rejects_nonpositive_rerank_top_k():
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"query": "test", "rerank_top_k": -1})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.integration
+def test_chat_returns_502_on_retrieval_failure(monkeypatch):
+    monkeypatch.setattr(
+        "api.main.retrieve_and_rerank",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("qdrant unavailable")),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"query": "test"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Retrieval backend failure."
+
+
+@pytest.mark.integration
+def test_chat_returns_502_on_unexpected_generation_failure(monkeypatch):
+    monkeypatch.setattr(
+        "api.main.retrieve_and_rerank",
+        lambda **kwargs: RetrievalResult(nodes=[TextNode(text="chunk", metadata={})], candidate_count=1),
+    )
+    monkeypatch.setattr(
+        "api.main.generate",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("upstream timeout")),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"query": "test"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Generation backend failure."
+
+
+@pytest.mark.integration
+def test_chat_returns_502_on_malformed_upstream_generation_response(monkeypatch):
+    monkeypatch.setattr(
+        "api.main.retrieve_and_rerank",
+        lambda **kwargs: RetrievalResult(nodes=[TextNode(text="chunk", metadata={})], candidate_count=1),
+    )
+    monkeypatch.setattr(
+        "api.main.generate",
+        lambda **kwargs: (_ for _ in ()).throw(MalformedGenerationResponseError("bad shape")),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"query": "test"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Malformed upstream generation response."

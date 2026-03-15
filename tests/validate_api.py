@@ -36,7 +36,9 @@ def check_chat() -> None:
 
     print(f"POST /chat -> answer snippet: {body['answer'][:120]!r}")
     print(f"           -> citations: {len(body['citations'])}")
-    print(f"           -> tokens: {body['usage']['total_tokens']}  cost: ${body['usage']['cost_usd']:.6f}")
+    cost = body["usage"]["cost_usd"]
+    cost_str = f"${cost:.6f}" if cost is not None else "unknown"
+    print(f"           -> tokens: {body['usage']['total_tokens']}  cost: {cost_str}")
 
 
 def main() -> None:

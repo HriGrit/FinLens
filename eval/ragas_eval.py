@@ -50,7 +50,8 @@ def run_pipeline_on_dataset(rows: list[dict]) -> list[dict]:
         year = row.get("year")
         print(f"  [{i}/{len(rows)}] {question[:70]}...")
 
-        nodes = retrieve_and_rerank(query=question, company=company, year=year)
+        retrieval = retrieve_and_rerank(query=question, company=company, year=year)
+        nodes = retrieval.nodes
         result = generate(query=question, context_nodes=nodes)
 
         results.append(
