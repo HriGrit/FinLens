@@ -11,7 +11,8 @@ from llama_index.core.schema import TextNode
 class _DummyEmbeddingModel:
     """Fast embedding stub used by tests that need a stable vector shape."""
 
-    vector_dim = 1024
+    # Keep fixture aligned with the default runtime embedding contract.
+    vector_dim = 768
 
     def get_text_embedding(self, _text: str) -> list[float]:
         return [0.0] * self.vector_dim
@@ -65,7 +66,8 @@ def qdrant_url() -> str:
 
 @pytest.fixture(scope="session")
 def test_collection_name() -> str:
-    return os.getenv("TEST_QDRANT_COLLECTION", "finlens_chunks_test")
+    base = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+    return os.getenv("TEST_QDRANT_COLLECTION", f"{base}_test")
 
 
 @pytest.fixture(scope="session")
@@ -86,6 +88,11 @@ def sample_nodes() -> list[TextNode]:
 @pytest.fixture()
 def fake_embed_model():
     return _DummyEmbeddingModel()
+
+
+@pytest.fixture(scope="session")
+def test_embedding_dim() -> int:
+    return _DummyEmbeddingModel.vector_dim
 
 
 @pytest.fixture(autouse=True)
