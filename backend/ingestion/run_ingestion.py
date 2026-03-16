@@ -572,8 +572,17 @@ def main() -> None:
         except Exception as exc:
             _mark_failed(manifest, filename, str(exc))
             _save_manifest(manifest)
-            cause = getattr(exc, "__cause__", None)
-            is_timeout = isinstance(cause, ResponseHandlingException) or isinstance(exc, ResponseHandlingException)
+            is_timeout = False
+            current = exc
+            while current is not None:
+                if isinstance(current, ResponseHandlingException):
+                    is_timeout = True
+                    break
+                current_type = type(current)
+                if current_type.__name__ == "ReadTimeout" and current_type.__module__.startswith(("httpx", "httpcore")):
+                    is_timeout = True
+                    break
+                current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
             if is_timeout:
                 print(
                     f"\n[ERROR] Qdrant upsert timed out for '{filename}' after all retries.\n"
