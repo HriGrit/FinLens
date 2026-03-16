@@ -57,6 +57,7 @@ export interface ReasoningPayload {
     total_tokens: number | null
     cost_usd?: number | null
   }
+  model_reasoning?: string
 }
 
 export interface ChatResponse {

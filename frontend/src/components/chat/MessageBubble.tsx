@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { motion } from 'framer-motion'
+import { Brain } from 'lucide-react'
 import { CitationCard } from './CitationCard'
 import { TokenAnalysis } from './TokenAnalysis'
 import ReactMarkdown from 'react-markdown'
@@ -9,6 +11,7 @@ import type { Message } from '../../stores/useAppStore'
 export function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
   const reasoning = message.reasoning
+  const [reasoningExpanded, setReasoningExpanded] = useState(false)
 
   return (
     <motion.div
@@ -18,13 +21,13 @@ export function MessageBubble({ message }: { message: Message }) {
       className={`flex flex-col gap-3 ${isUser ? 'items-end' : 'items-start'}`}
     >
       {/* Role label */}
-      <div className="font-mono text-[9px] uppercase tracking-widest text-muted px-1">
+      <div className="font-mono text-[11px] uppercase tracking-widest text-muted px-1">
         {isUser ? 'you' : 'finlens'}
       </div>
 
       {/* Message body */}
       <div
-        className={`rounded-xl px-4 py-3 max-w-[85%] text-sm leading-relaxed font-sans ${
+        className={`rounded-xl px-4 py-3 max-w-[85%] text-base leading-relaxed font-sans ${
           isUser
             ? 'bg-amber-500/10 border border-amber-500/20 text-text-primary ml-8'
             : 'bg-surface border border-border text-text-primary mr-8'
@@ -117,6 +120,27 @@ export function MessageBubble({ message }: { message: Message }) {
                     )
                   })}
                 </div>
+              </div>
+            )}
+            {reasoning.model_reasoning && (
+              <div>
+                <p className="font-mono text-muted mb-1 flex items-center gap-1.5">
+                  <Brain size={10} /> Model Reasoning
+                </p>
+                <div className="rounded-md border border-border bg-bg px-3 py-2 text-[11px] font-sans
+                                text-text-secondary leading-relaxed whitespace-pre-wrap">
+                  {reasoningExpanded || reasoning.model_reasoning.length <= 500
+                    ? reasoning.model_reasoning
+                    : reasoning.model_reasoning.slice(0, 500) + '…'}
+                </div>
+                {reasoning.model_reasoning.length > 500 && (
+                  <button
+                    onClick={() => setReasoningExpanded(v => !v)}
+                    className="mt-1 font-mono text-[10px] text-amber-400 hover:text-amber-300 transition-colors"
+                  >
+                    {reasoningExpanded ? 'Show less' : 'Show full reasoning'}
+                  </button>
+                )}
               </div>
             )}
           </div>
