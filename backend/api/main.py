@@ -12,6 +12,7 @@ Routes:
 import os
 import json
 import asyncio
+import logging
 import dataclasses
 import time
 from pathlib import Path
@@ -41,6 +42,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FinLens API", version="0.1.0", lifespan=_lifespan)
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -170,6 +172,7 @@ def chat(request: ChatRequest) -> ChatResponse:
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception:
+        logger.exception("Generation failed for model=%s", request.model)
         raise HTTPException(status_code=502, detail="Generation backend failure.")
     generation_ms = int((time.perf_counter() - generation_ms_start) * 1000)
 
