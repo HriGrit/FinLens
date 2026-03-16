@@ -9,10 +9,11 @@ from typing import Any, Iterable, Optional
 from llama_index.core.schema import TextNode
 
 # I7: Allowlist of recognized doc_type values (canonical form after normalisation)
-_ALLOWED_DOC_TYPES: frozenset[str] = frozenset({"10-K", "10-Q", "8-K", "DEF14A"})
+# "OTHER" is the fallback for PDFs whose filename does not carry a known filing type.
+_ALLOWED_DOC_TYPES: frozenset[str] = frozenset({"10-K", "10-Q", "8-K", "DEF14A", "OTHER"})
 # Regex that matches the raw token before hyphenation normalisation (e.g. "10K", "10Q", "8K")
 _DOC_TYPE_RAW_RE = re.compile(
-    r"^(10-?K|10-?Q|8-?K|DEF14A)$",
+    r"^(10-?K|10-?Q|8-?K|DEF14A|OTHER)$",
     re.IGNORECASE,
 )
 

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .chunk import split_paragraph_nodes
-from .discovery import PDF_DIR, DocSpec, discover_pdfs, parse_pdf_filename
+from .discovery import PDF_DIR, DocSpec, discover_pdfs
 from .index import build_bm25_index, build_qdrant_index
 from .parse import assert_node_metadata
 from llama_index.core.schema import TextNode
@@ -46,29 +46,9 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 # Document discovery
 # ---------------------------------------------------------------------------
 
-def _parse_pdf_filename(pdf_path: Path) -> DocSpec | None:
-    """Parse {COMPANY}_{YEAR}_{DOCTYPE}.pdf into a DocSpec. Returns None if unparseable."""
-    spec = parse_pdf_filename(pdf_path)
-    if spec is None:
-        print(f"  WARN — skipping unparseable filename: {pdf_path.name}")
-        return None
-    return spec
-
-
 def _discover_pdfs() -> list[DocSpec]:
-    """Glob PDF_DIR for *.pdf files and parse each into a DocSpec."""
-    known_specs = {spec.path.name: spec for spec in discover_pdfs(PDF_DIR)}
-    if not PDF_DIR.exists():
-        return []
-
-    specs: list[DocSpec] = []
-    for pdf_path in sorted(PDF_DIR.glob("*.pdf")):
-        spec = known_specs.get(pdf_path.name)
-        if spec is not None:
-            specs.append(spec)
-        else:
-            _parse_pdf_filename(pdf_path)
-    return specs
+    """Glob PDF_DIR for *.pdf files and return a DocSpec for every one found."""
+    return discover_pdfs(PDF_DIR)
 
 
 # ---------------------------------------------------------------------------

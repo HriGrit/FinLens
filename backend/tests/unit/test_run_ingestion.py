@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from llama_index.core.schema import TextNode
 
+from ingestion.discovery import parse_pdf_filename
 from ingestion.run_ingestion import (
     DocSpec,
     _build_batch,
@@ -16,7 +17,6 @@ from ingestion.run_ingestion import (
     _mark_pending,
     _mark_success,
     _migrate_registry_to_manifest,
-    _parse_pdf_filename,
     _parse_batch,
     _rebuild_bm25_for_indexed_docs,
     _save_chunk_artifact,
@@ -29,40 +29,42 @@ def _path(name: str) -> Path:
 
 
 def test_standard_three_part_filename():
-    spec = _parse_pdf_filename(_path("3M_2022_10K.pdf"))
-    assert spec is not None
+    spec = parse_pdf_filename(_path("3M_2022_10K.pdf"))
     assert spec.company == "3M"
     assert spec.year == "2022"
     assert spec.doc_type == "10-K"
 
 
 def test_company_with_underscore():
-    spec = _parse_pdf_filename(_path("JOHNSON_JOHNSON_2022_10K.pdf"))
-    assert spec is not None
+    spec = parse_pdf_filename(_path("JOHNSON_JOHNSON_2022_10K.pdf"))
     assert spec.company == "JOHNSON_JOHNSON"
     assert spec.year == "2022"
     assert spec.doc_type == "10-K"
 
 
-def test_four_part_numeric_suffix_rejected():
-    spec = _parse_pdf_filename(_path("3M_2022_10K_10.pdf"))
-    assert spec is None
+def test_unrecognized_filename_falls_back_to_other():
+    # Filenames that don't match {COMPANY}_{YEAR}_{DOCTYPE} are accepted with fallback values.
+    spec = parse_pdf_filename(_path("BADNAME.pdf"))
+    assert spec is not None
+    assert spec.doc_type == "OTHER"
+    assert spec.year == "0000"
+    assert spec.company == "BADNAME"
 
 
-def test_too_few_parts_rejected():
-    spec = _parse_pdf_filename(_path("BADNAME.pdf"))
-    assert spec is None
+def test_non_standard_suffix_falls_back():
+    # Numeric trailing segment makes year detection fail -> fallback
+    spec = parse_pdf_filename(_path("3M_2022_10K_10.pdf"))
+    assert spec is not None
+    assert spec.doc_type == "OTHER"
 
 
 def test_10q_doc_type_hyphenated():
-    spec = _parse_pdf_filename(_path("APPLE_2023_10Q.pdf"))
-    assert spec is not None
+    spec = parse_pdf_filename(_path("APPLE_2023_10Q.pdf"))
     assert spec.doc_type == "10-Q"
 
 
 def test_10q_with_quarter_year():
-    spec = _parse_pdf_filename(_path("MSFT_2023Q1_10Q.pdf"))
-    assert spec is not None
+    spec = parse_pdf_filename(_path("MSFT_2023Q1_10Q.pdf"))
     assert spec.year == "2023Q1"
     assert spec.doc_type == "10-Q"
 
