@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from generation.generate import (
     DEFAULT_MODEL,
+    AllModelsTooHotError,
     MalformedGenerationResponseError,
     generate,
     register_langfuse_callbacks,
@@ -111,9 +112,35 @@ class ChatResponse(BaseModel):
     citations: list[dict]
     usage: dict
     model: str
+    fallback: ChatFallbackState | None = None
     latency_ms: int
     trace_id: str
     reasoning: dict
+
+
+class FallbackEvent(BaseModel):
+    from_model: str
+    to_model: str
+    reason: str
+
+
+class ChatFallbackState(BaseModel):
+    requested_model: str
+    active_model: str
+    fallback_used: bool
+    fallback_attempts: int
+    attempted_models: list[str]
+    events: list[FallbackEvent]
+
+
+class ProvidersTooHotResponse(BaseModel):
+    code: str
+    message: str
+    requested_model: str
+    active_model: str
+    attempted_models: list[str]
+    fallback_attempts: int
+    events: list[FallbackEvent]
 
 
 class FreeModelResponse(BaseModel):
@@ -133,7 +160,11 @@ def free_models() -> list[FreeModelResponse]:
     return [FreeModelResponse(**dataclasses.asdict(model)) for model in get_free_models()]
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    responses={503: {"model": ProvidersTooHotResponse}},
+)
 def chat(request: ChatRequest) -> ChatResponse:
     t0 = time.perf_counter()
     trace = create_trace(
@@ -166,6 +197,19 @@ def chat(request: ChatRequest) -> ChatResponse:
             context_nodes=nodes,
             model=request.model or DEFAULT_MODEL,
             trace=trace,
+        )
+    except AllModelsTooHotError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "providers_too_hot",
+                "message": "Generation is temporarily unavailable because model providers are too hot.",
+                "requested_model": exc.requested_model,
+                "active_model": exc.active_model,
+                "attempted_models": exc.attempted_models,
+                "fallback_attempts": exc.fallback_attempts,
+                "events": [event.model_dump() for event in exc.events],
+            },
         )
     except MalformedGenerationResponseError:
         raise HTTPException(status_code=502, detail="Malformed upstream generation response.")
