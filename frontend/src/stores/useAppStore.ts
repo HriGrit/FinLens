@@ -27,6 +27,7 @@ export interface Message {
   usage?: TokenUsage
   model?: string
   latency_ms?: number
+  fallback?: GenerationFallback
 }
 
 export interface ReasoningPayload {
@@ -63,9 +64,25 @@ export interface ChatResponse {
   citations: Citation[]
   usage: TokenUsage
   model: string
+  fallback?: GenerationFallback
   latency_ms: number
   trace_id: string
   reasoning: ReasoningPayload
+}
+
+export interface FallbackEvent {
+  from_model: string
+  to_model: string
+  reason: string
+}
+
+export interface GenerationFallback {
+  requested_model: string
+  active_model: string
+  fallback_used: boolean
+  fallback_attempts: number
+  attempted_models: string[]
+  events: FallbackEvent[]
 }
 
 export interface FreeModelOption {

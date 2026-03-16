@@ -57,6 +57,16 @@ export function MessageBubble({ message }: { message: Message }) {
         )}
       </div>
 
+      {!isUser && message.fallback && message.fallback.events.length > 0 && (
+        <div className="w-full max-w-[85%] text-xs">
+          {message.fallback.events.map((event, idx) => (
+            <p key={`${event.from_model}-${idx}`} className="font-mono text-amber-300">
+              {event.from_model} is very hot, moving to {event.to_model}.
+            </p>
+          ))}
+        </div>
+      )}
+
       {/* Citations */}
       {!isUser && message.citations && message.citations.length > 0 && (
         <div className="flex flex-col gap-2 w-full max-w-[85%]">
