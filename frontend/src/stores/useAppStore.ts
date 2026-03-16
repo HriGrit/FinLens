@@ -77,12 +77,6 @@ export interface FreeModelOption {
 
 export const DEFAULT_FREE_MODELS: FreeModelOption[] = [
   {
-    id: 'openrouter/free',
-    name: 'Free Models Router',
-    context_length: 200000,
-    description: 'OpenRouter auto-selects a currently available free model.',
-  },
-  {
     id: 'arcee-ai/trinity-large-preview:free',
     name: 'Arcee AI: Trinity Large Preview (free)',
     context_length: 131000,
@@ -163,7 +157,7 @@ export const useAppStore = create<AppState>((set) => ({
   freeModels: DEFAULT_FREE_MODELS,
   company: '',
   year: '',
-  model: 'openrouter/stepfun/step-3.5-flash:free',
+  model: 'qwen/qwen3-4b:free',
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   setLoading: (v) => set({ isLoading: v }),
   setHealth: (h) => set({ health: h }),
