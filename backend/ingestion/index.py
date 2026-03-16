@@ -4,15 +4,21 @@ index.py — Build and persist Qdrant vector index and BM25 index.
 Milestone coverage: M2.3 (Qdrant index built), M2.4 (BM25 index persisted).
 """
 import pickle
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
 from llama_index.core.schema import TextNode
+from qdrant_client.http.exceptions import ResponseHandlingException
 from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 
 
 _POINT_ID_FIELDS = ("filename", "company", "year", "doc_type", "page_number", "element_type")
+
+_UPSERT_MAX_ATTEMPTS = 3
+_UPSERT_BACKOFF_SECONDS = [5, 10, 20]  # delay before attempt 2, 3
 
 
 def _make_point_id(
@@ -102,16 +108,34 @@ def build_qdrant_index(nodes: list[TextNode], collection_name: str = QDRANT_COLL
     batch_size = 100
     for i in range(0, len(points), batch_size):
         batch = points[i : i + batch_size]
-        # Q1: Check upsert status and raise if not completed
-        result = client.upsert(collection_name=collection_name, points=batch)
-        status = getattr(result, "status", None)
-        if status is not None:
-            status_name = getattr(status, "value", str(status)).lower()
-            if status_name != "completed":
-                raise RuntimeError(
-                    f"Qdrant upsert did not complete successfully: status={status!r} "
-                    f"(batch starting at index {i})"
-                )
+        last_exc: Exception | None = None
+        for attempt in range(_UPSERT_MAX_ATTEMPTS):
+            try:
+                result = client.upsert(collection_name=collection_name, points=batch)
+                status = getattr(result, "status", None)
+                if status is not None:
+                    status_name = getattr(status, "value", str(status)).lower()
+                    if status_name != "completed":
+                        raise RuntimeError(
+                            f"Qdrant upsert did not complete successfully: status={status!r} "
+                            f"(batch starting at index {i})"
+                        )
+                last_exc = None
+                break  # success
+            except (ResponseHandlingException, httpx.ReadTimeout) as exc:
+                last_exc = exc
+                if attempt < _UPSERT_MAX_ATTEMPTS - 1:
+                    wait = _UPSERT_BACKOFF_SECONDS[attempt]
+                    print(
+                        f"  [retry {attempt + 1}/{_UPSERT_MAX_ATTEMPTS - 1}] Qdrant upsert timed out "
+                        f"(batch {i}–{i + len(batch) - 1}), retrying in {wait}s ..."
+                    )
+                    time.sleep(wait)
+        if last_exc is not None:
+            raise RuntimeError(
+                f"Qdrant upsert failed after {_UPSERT_MAX_ATTEMPTS} attempts "
+                f"(batch starting at index {i}): {last_exc}"
+            ) from last_exc
 
     print(f"Upserted {len(points)} points into '{collection_name}'.")
 

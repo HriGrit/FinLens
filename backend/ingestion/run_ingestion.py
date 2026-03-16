@@ -18,6 +18,8 @@ import json
 import os
 import pickle
 import sys
+
+from qdrant_client.http.exceptions import ResponseHandlingException
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
@@ -503,6 +505,17 @@ def main() -> None:
         except Exception as exc:
             _mark_failed(manifest, filename, str(exc))
             _save_manifest(manifest)
+            cause = getattr(exc, "__cause__", None)
+            is_timeout = isinstance(cause, ResponseHandlingException) or isinstance(exc, ResponseHandlingException)
+            if is_timeout:
+                print(
+                    f"\n[ERROR] Qdrant upsert timed out for '{filename}' after all retries.\n"
+                    f"  Cause : {exc}\n"
+                    f"  Fix   : Increase QDRANT_TIMEOUT (current default: 60s) or reduce "
+                    f"_UPSERT_BATCH_SIZE in index.py\n"
+                    f"  State : manifest updated; re-run ingestion to retry this document."
+                )
+                sys.exit(1)
             if not args.continue_on_error:
                 raise
 
