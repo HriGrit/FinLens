@@ -230,6 +230,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         usage=result["usage"],
         retrieval_ms=retrieval_ms,
         generation_ms=generation_ms,
+        model_reasoning=result.get("model_reasoning"),
     )
 
     trace.update(output=result["answer"])
@@ -252,6 +253,7 @@ def _build_reasoning(
     usage: dict,
     retrieval_ms: int,
     generation_ms: int,
+    model_reasoning: str | None = None,
 ) -> dict:
     top_sources = []
     for node in context_nodes[:3]:
@@ -264,7 +266,7 @@ def _build_reasoning(
             }
         )
 
-    return {
+    result: dict = {
         "summary": (
             f"FinLens answered '{query}' using {len(context_nodes)} reranked chunks "
             f"from Langfuse trace {trace_id}."
@@ -290,6 +292,9 @@ def _build_reasoning(
             "cost_usd": usage.get("cost_usd"),
         },
     }
+    if model_reasoning is not None:
+        result["model_reasoning"] = model_reasoning
+    return result
 
 
 @app.get("/status/ingestion")

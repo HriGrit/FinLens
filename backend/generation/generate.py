@@ -6,6 +6,7 @@ Milestone coverage: M0.5 (LiteLLM -> OpenRouter -> Mistral).
 from __future__ import annotations
 
 import os
+import re
 import random
 from collections.abc import Sequence
 from typing import Any
@@ -18,6 +19,7 @@ from .prompt import build_prompt
 from .openrouter_models import get_free_models
 
 DEFAULT_MODEL = "qwen/qwen3-4b:free"
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 OPENROUTER_PROVIDER_PREFIX = "openrouter/"
 KNOWN_PROVIDER_PREFIXES = (
@@ -174,7 +176,7 @@ def _call_litellm_once(
         api_base=OPENROUTER_API_BASE,
         metadata=lf_metadata,
     )
-    answer, usage_dict = _validated_answer_and_usage(response)
+    answer, model_reasoning, usage_dict = _validated_answer_and_usage(response)
     try:
         cost = litellm.completion_cost(completion_response=response)
     except Exception:
@@ -183,11 +185,21 @@ def _call_litellm_once(
     return {
         "answer": answer,
         "model": model,
+        "model_reasoning": model_reasoning,
         "usage": {**usage_dict, "cost_usd": cost},
     }, usage_dict
 
 
-def _validated_answer_and_usage(response: Any) -> tuple[str, dict[str, int]]:
+def _extract_think(content: str) -> tuple[str, str | None]:
+    match = _THINK_RE.search(content)
+    if match is None:
+        return content.strip(), None
+    reasoning_text = match.group(1).strip()
+    clean = _THINK_RE.sub("", content).strip()
+    return clean, reasoning_text or None
+
+
+def _validated_answer_and_usage(response: Any) -> tuple[str, str | None, dict[str, int]]:
     choices = getattr(response, "choices", None)
     if not isinstance(choices, Sequence) or len(choices) == 0:
         raise MalformedGenerationResponseError("LLM response is missing choices.")
@@ -210,7 +222,8 @@ def _validated_answer_and_usage(response: Any) -> tuple[str, dict[str, int]]:
             )
         usage_dict[field] = value
 
-    return content, usage_dict
+    clean_content, model_reasoning = _extract_think(content)
+    return clean_content, model_reasoning, usage_dict
 
 
 def generate(
@@ -276,6 +289,7 @@ def generate(
     final_answer = final_result["answer"]
     final_usage = final_result["usage"]
     final_model = final_result["model"]
+    final_model_reasoning = final_result.get("model_reasoning")
 
     citations = [
         {
@@ -294,6 +308,7 @@ def generate(
         "citations": citations,
         "usage": final_usage,
         "model": final_model,
+        "model_reasoning": final_model_reasoning,
         "fallback": _build_fallback_metadata(
             requested_model=normalized_request,
             active_model=final_model,
