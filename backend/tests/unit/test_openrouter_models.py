@@ -19,14 +19,13 @@ def test_is_free_model_accepts_free_suffix_and_zero_pricing():
 def test_dedupe_models_keeps_last_copy_and_sorts_router_first():
     models = [
         FreeModelOption(id="vendor/b", name="B"),
-        FreeModelOption(id="openrouter/free", name="Router"),
         FreeModelOption(id="vendor/a", name="A"),
         FreeModelOption(id="vendor/b", name="B newer"),
     ]
 
     deduped = _dedupe_models(models)
 
-    assert [model.id for model in deduped] == ["openrouter/free", "vendor/a", "vendor/b"]
+    assert [model.id for model in deduped] == ["vendor/a", "vendor/b"]
     assert deduped[-1].name == "B newer"
 
 
@@ -38,5 +37,5 @@ def test_get_free_models_falls_back_when_fetch_fails(monkeypatch):
     models = get_free_models(force_refresh=True)
 
     assert models
-    assert models[0].id == "openrouter/free"
+    assert models[0].id == "arcee-ai/trinity-large-preview:free"
     assert {model.id for model in models}.issuperset({model.id for model in FALLBACK_FREE_MODELS})

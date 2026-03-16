@@ -99,6 +99,7 @@ In GitHub, run workflow_dispatch on `.github/workflows/eval.yml`
 ```bash
 cd backend
 uv run python ingestion/setup_collection.py
+uv run python -m ingestion.run_ingestion --pdf 3M_2022_10K.pdf
 uv run python ingestion/run_ingestion.py
 uv run uvicorn api.main:app --reload --port 8000
 ```

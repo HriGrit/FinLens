@@ -6,14 +6,11 @@ Run once before ingestion. Safe to re-run — exits cleanly if collection alread
 Usage (from backend/):
     uv run python ingestion/setup_collection.py
 """
-import os
-
 from dotenv import load_dotenv
 
 load_dotenv()
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
+from shared.qdrant import get_qdrant_client, get_qdrant_collection
 
 
 def setup_collection() -> None:
@@ -22,7 +19,6 @@ def setup_collection() -> None:
     except ModuleNotFoundError:
         # Supports execution via `uv run python backend/ingestion/setup_collection.py`.
         from embed import get_embed_model
-    from qdrant_client import QdrantClient
     from qdrant_client.models import (
         Distance,
         HnswConfigDiff,
@@ -31,13 +27,14 @@ def setup_collection() -> None:
     )
 
     dense_dim = len(get_embed_model().get_text_embedding("test"))
-    client = QdrantClient(url=QDRANT_URL)
+    client = get_qdrant_client()
+    collection_name = get_qdrant_collection()
 
-    if client.collection_exists(COLLECTION_NAME):
-        print(f"Collection '{COLLECTION_NAME}' already exists — skipping creation.")
+    if client.collection_exists(collection_name):
+        print(f"Collection '{collection_name}' already exists — skipping creation.")
     else:
         client.create_collection(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection_name,
             vectors_config={
                 "dense": VectorParams(
                     size=dense_dim,
@@ -48,7 +45,7 @@ def setup_collection() -> None:
                 )
             },
         )
-        print(f"Created collection '{COLLECTION_NAME}' (dim={dense_dim}, cosine, m=16, ef_construct=200).")
+        print(f"Created collection '{collection_name}' (dim={dense_dim}, cosine, m=16, ef_construct=200).")
 
     # Payload indexes — idempotent (Qdrant is a no-op if index already exists)
     FILTER_FIELDS = {
@@ -59,7 +56,7 @@ def setup_collection() -> None:
     }
     for field, schema in FILTER_FIELDS.items():
         client.create_payload_index(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection_name,
             field_name=field,
             field_schema=schema,
         )

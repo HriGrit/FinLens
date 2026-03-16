@@ -46,6 +46,13 @@ def split_paragraph_nodes(
     # One batched splitter call instead of N individual calls
     all_split = splitter.get_nodes_from_documents(source_docs) if source_docs else []
 
+    # I3: assert every output chunk from the splitter carries _source_idx
+    for chunk_idx, chunk_node in enumerate(all_split):
+        assert "_source_idx" in chunk_node.metadata, (
+            f"Chunk {chunk_idx} produced by splitter is missing '_source_idx' in metadata. "
+            "The splitter may not be preserving source metadata."
+        )
+
     # Group output chunks by source paragraph
     grouped: dict[int, list] = defaultdict(list)
     for chunk_node in all_split:
@@ -75,6 +82,14 @@ def split_paragraph_nodes(
                 continue
             meta = dict(node.metadata)
             meta.update({k: v for k, v in chunk_node.metadata.items() if not k.startswith("_")})
+            # I4: restore authoritative parse-time metadata fields from the original node,
+            # overriding whatever the splitter may have set.
+            _PARSE_TIME_FIELDS = (
+                "element_type", "page_number", "filename", "company", "year", "doc_type"
+            )
+            for field in _PARSE_TIME_FIELDS:
+                if field in node.metadata:
+                    meta[field] = node.metadata[field]
             meta["chunk_index"] = chunk_index
             result_nodes.append(TextNode(text=chunk_text, metadata=meta))
         out[orig_pos] = result_nodes  # will be flattened below

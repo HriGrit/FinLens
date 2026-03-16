@@ -8,6 +8,10 @@ on:
       - reopened
       - ready_for_review
 
+permissions:
+  contents: read
+  pull-requests: read
+
 concurrency:
   group: pr-checks-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -19,7 +23,6 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
-      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -38,9 +41,6 @@ jobs:
               - 'frontend/package-lock.json'
               - 'backend/api/main.py'
               - 'frontend/src/api/client.ts'
-            docs:
-              - '*.md'
-              - 'docs/**'
 
   backend-unit:
     name: Backend unit tests

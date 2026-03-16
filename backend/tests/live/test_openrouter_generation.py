@@ -10,7 +10,7 @@ from generation.generate import generate
 
 @pytest.mark.live
 def test_openrouter_generation_returns_answer(requires_openrouter):
-    model = os.getenv("OPENROUTER_TEST_MODEL", "openrouter/stepfun/step-3.5-flash:free")
+    model = os.getenv("OPENROUTER_TEST_MODEL", "qwen/qwen3-4b:free")
     nodes = [
         TextNode(
             text="3M reported net sales of $35.4 billion in 2022.",

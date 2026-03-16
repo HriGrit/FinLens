@@ -12,6 +12,7 @@ Routes:
 import os
 import json
 import asyncio
+import logging
 import dataclasses
 import time
 from pathlib import Path
@@ -21,12 +22,19 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
-from qdrant_client import QdrantClient
 
-from generation.generate import DEFAULT_MODEL, generate, register_langfuse_callbacks
+from generation.generate import (
+    DEFAULT_MODEL,
+    AllModelsTooHotError,
+    MalformedGenerationResponseError,
+    generate,
+    register_langfuse_callbacks,
+)
 from generation.openrouter_models import get_free_models
+from ingestion.discovery import discover_pdfs
 from observability.tracing import create_trace
 from retrieval.pipeline import retrieve_and_rerank
+from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -35,6 +43,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FinLens API", version="0.1.0", lifespan=_lifespan)
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,14 +52,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
 LANGFUSE_URL = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
-REGISTRY_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_registry.json"
+MANIFEST_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_manifest.json"
+PDF_DIR = Path(__file__).resolve().parents[2] / "data" / "financebench" / "pdfs"
 INGESTION_CACHE_TTL = 30  # seconds
 
 _ingestion_cache: dict | None = None
 _ingestion_cache_expires_at: float = 0.0
+
+
+def _discover_ingestible_filenames() -> set[str]:
+    return {
+        spec.path.name
+        for spec in discover_pdfs(PDF_DIR)
+        if spec.doc_type != "OTHER"
+    }
+
+
+def _load_manifest() -> dict[str, dict]:
+    if not MANIFEST_PATH.exists():
+        return {}
+    try:
+        manifest = json.loads(MANIFEST_PATH.read_text())
+    except Exception:
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _manifest_filenames_with_status(
+    manifest: dict[str, dict],
+    status: str,
+    ingestible_filenames: set[str],
+) -> set[str]:
+    return {
+        filename
+        for filename, entry in manifest.items()
+        if filename in ingestible_filenames
+        and isinstance(entry, dict)
+        and entry.get("status") == status
+    }
 
 
 class ChatRequest(BaseModel):
@@ -58,8 +98,8 @@ class ChatRequest(BaseModel):
     company: str | None = None
     year: str | None = None
     model: str | None = None
-    retrieval_top_k: int = 20
-    rerank_top_k: int = 5
+    retrieval_top_k: int = Field(default=20, gt=0)
+    rerank_top_k: int = Field(default=5, gt=0)
 
     @field_validator("query", mode="before")
     @classmethod
@@ -72,9 +112,35 @@ class ChatResponse(BaseModel):
     citations: list[dict]
     usage: dict
     model: str
+    fallback: ChatFallbackState | None = None
     latency_ms: int
     trace_id: str
     reasoning: dict
+
+
+class FallbackEvent(BaseModel):
+    from_model: str
+    to_model: str
+    reason: str
+
+
+class ChatFallbackState(BaseModel):
+    requested_model: str
+    active_model: str
+    fallback_used: bool
+    fallback_attempts: int
+    attempted_models: list[str]
+    events: list[FallbackEvent]
+
+
+class ProvidersTooHotResponse(BaseModel):
+    code: str
+    message: str
+    requested_model: str
+    active_model: str
+    attempted_models: list[str]
+    fallback_attempts: int
+    events: list[FallbackEvent]
 
 
 class FreeModelResponse(BaseModel):
@@ -94,7 +160,11 @@ def free_models() -> list[FreeModelResponse]:
     return [FreeModelResponse(**dataclasses.asdict(model)) for model in get_free_models()]
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    responses={503: {"model": ProvidersTooHotResponse}},
+)
 def chat(request: ChatRequest) -> ChatResponse:
     t0 = time.perf_counter()
     trace = create_trace(
@@ -103,14 +173,18 @@ def chat(request: ChatRequest) -> ChatResponse:
     )
     retrieval_ms_start = time.perf_counter()
 
-    nodes, n_candidates = retrieve_and_rerank(
-        query=request.query,
-        retrieval_top_k=request.retrieval_top_k,
-        rerank_top_k=request.rerank_top_k,
-        company=request.company,
-        year=request.year,
-        trace=trace,
-    )
+    try:
+        retrieval_result = retrieve_and_rerank(
+            query=request.query,
+            retrieval_top_k=request.retrieval_top_k,
+            rerank_top_k=request.rerank_top_k,
+            company=request.company,
+            year=request.year,
+            trace=trace,
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Retrieval backend failure.")
+    nodes = retrieval_result.nodes
     retrieval_ms = int((time.perf_counter() - retrieval_ms_start) * 1000)
 
     if not nodes:
@@ -124,8 +198,26 @@ def chat(request: ChatRequest) -> ChatResponse:
             model=request.model or DEFAULT_MODEL,
             trace=trace,
         )
+    except AllModelsTooHotError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "providers_too_hot",
+                "message": "Generation is temporarily unavailable because model providers are too hot.",
+                "requested_model": exc.requested_model,
+                "active_model": exc.active_model,
+                "attempted_models": exc.attempted_models,
+                "fallback_attempts": exc.fallback_attempts,
+                "events": [event.model_dump() for event in exc.events],
+            },
+        )
+    except MalformedGenerationResponseError:
+        raise HTTPException(status_code=502, detail="Malformed upstream generation response.")
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except Exception:
+        logger.exception("Generation failed for model=%s", request.model)
+        raise HTTPException(status_code=502, detail="Generation backend failure.")
     generation_ms = int((time.perf_counter() - generation_ms_start) * 1000)
 
     reasoning = _build_reasoning(
@@ -133,7 +225,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         trace_id=trace.id,
         request=request,
         context_nodes=nodes,
-        n_candidates=n_candidates,
+        n_candidates=retrieval_result.candidate_count,
         generation_model=result["model"],
         usage=result["usage"],
         retrieval_ms=retrieval_ms,
@@ -209,7 +301,7 @@ def ingestion_status() -> dict:
         return _ingestion_cache
 
     try:
-        client = QdrantClient(url=QDRANT_URL, timeout=3)
+        client = get_qdrant_client()
         count_result = client.count(collection_name=QDRANT_COLLECTION, exact=True)
         indexed_chunks = count_result.count
 
@@ -230,42 +322,54 @@ def ingestion_status() -> dict:
                     filenames.add(fn)
             if offset is None:
                 break
-        total_documents = 0
-        if REGISTRY_PATH.exists():
-            try:
-                registry = json.loads(REGISTRY_PATH.read_text())
-                if isinstance(registry, dict):
-                    total_documents = len(registry.get("ingested", []))
-            except Exception:
-                pass
-        if total_documents == 0:
-            total_documents = len(filenames)
+
+        ingestible_filenames = _discover_ingestible_filenames()
+        manifest = _load_manifest()
+        indexed_filenames = filenames & ingestible_filenames
+        failed_filenames = _manifest_filenames_with_status(
+            manifest,
+            status="failed",
+            ingestible_filenames=ingestible_filenames,
+        ) - indexed_filenames
+        pending_documents = len(ingestible_filenames - indexed_filenames - failed_filenames)
 
         result = {
-            "total_documents": total_documents,
-            "indexed_documents": len(filenames),
+            "total_documents": len(ingestible_filenames),
+            "indexed_documents": len(indexed_filenames),
             "indexed_chunks": indexed_chunks,
+            "pending_documents": pending_documents,
+            "failed_documents": len(failed_filenames),
             "status": "idle",
         }
         _ingestion_cache = result
         _ingestion_cache_expires_at = now + INGESTION_CACHE_TTL
         return result
-    except Exception as exc:
+    except Exception:
         try:
-            total_documents = 0
-            if REGISTRY_PATH.exists():
-                registry = json.loads(REGISTRY_PATH.read_text())
-                if isinstance(registry, dict):
-                    total_documents = len(registry.get("ingested", []))
+            ingestible_filenames = _discover_ingestible_filenames()
+            manifest = _load_manifest()
+            indexed_filenames = _manifest_filenames_with_status(
+                manifest,
+                status="success",
+                ingestible_filenames=ingestible_filenames,
+            )
+            failed_filenames = _manifest_filenames_with_status(
+                manifest,
+                status="failed",
+                ingestible_filenames=ingestible_filenames,
+            )
         except Exception:
-            total_documents = 0
+            ingestible_filenames = set()
+            indexed_filenames = set()
+            failed_filenames = set()
 
         result = {
-            "total_documents": total_documents,
-            "indexed_documents": 0,
-            "indexed_chunks": 0,
+            "total_documents": len(ingestible_filenames),
+            "indexed_documents": len(indexed_filenames),
+            "indexed_chunks": None,
+            "pending_documents": len(ingestible_filenames - indexed_filenames - failed_filenames),
+            "failed_documents": len(failed_filenames),
             "status": "error",
-            "detail": str(exc),
         }
         _ingestion_cache = result
         _ingestion_cache_expires_at = now + INGESTION_CACHE_TTL
@@ -287,8 +391,20 @@ async def services_status() -> dict:
         except Exception as exc:
             return {"status": "error", "latency_ms": -1, "detail": str(exc)}
 
+    async def _check_qdrant() -> dict:
+        start = time.perf_counter()
+        try:
+            await asyncio.to_thread(lambda: get_qdrant_client().get_collections())
+            return {
+                "status": "ok",
+                "latency_ms": int((time.perf_counter() - start) * 1000),
+                "detail": "collections endpoint reachable",
+            }
+        except Exception as exc:
+            return {"status": "error", "latency_ms": -1, "detail": str(exc)}
+
     async with httpx.AsyncClient() as client:
-        qdrant_task = _check(f"{QDRANT_URL}/healthz")
+        qdrant_task = _check_qdrant()
         langfuse_task = _check(f"{LANGFUSE_URL}/api/public/health")
         qdrant_status, langfuse_status = await asyncio.gather(qdrant_task, langfuse_task)
 

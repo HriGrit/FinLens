@@ -20,12 +20,6 @@ class FreeModelOption:
 
 FALLBACK_FREE_MODELS: tuple[FreeModelOption, ...] = (
     FreeModelOption(
-        id="openrouter/free",
-        name="Free Models Router",
-        context_length=200000,
-        description="OpenRouter auto-selects a currently available free model.",
-    ),
-    FreeModelOption(
         id="arcee-ai/trinity-large-preview:free",
         name="Arcee AI: Trinity Large Preview (free)",
         context_length=131000,
@@ -71,6 +65,12 @@ def _is_free_model(model: dict[str, Any]) -> bool:
     )
 
 
+def _is_supported_free_model(model_id: str) -> bool:
+    """Filter out known unsupported aliases that regress in this deployment."""
+
+    return model_id != "openrouter/free"
+
+
 def _to_free_model_option(model: dict[str, Any]) -> FreeModelOption:
     return FreeModelOption(
         id=str(model["id"]),
@@ -96,7 +96,11 @@ def _fetch_free_models() -> list[FreeModelOption]:
     response.raise_for_status()
     payload = response.json()
     data = payload.get("data", [])
-    free_models = [_to_free_model_option(model) for model in data if _is_free_model(model)]
+    free_models = [
+        _to_free_model_option(model)
+        for model in data
+        if _is_free_model(model) and _is_supported_free_model(str(model.get("id", "")))
+    ]
     if not free_models:
         raise ValueError("OpenRouter models API returned no free models.")
     return _dedupe_models(free_models)

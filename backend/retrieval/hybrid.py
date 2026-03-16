@@ -6,19 +6,22 @@ and returns a deduplicated ranked list of TextNodes.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from llama_index.core.schema import TextNode
+from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "finlens_chunks_dev")
 BM25_INDEX_PATH = Path(__file__).resolve().parents[2] / "data" / "bm25_index.pkl"
 RRF_K = 60  # standard RRF constant
 
 
 def _rrf_score(rank: int, k: int = RRF_K) -> float:
     return 1.0 / (k + rank)
+
+
+def _prefer_incoming_node(existing_source: str, incoming_source: str) -> bool:
+    """Explicit duplicate policy: dense metadata wins for identical text."""
+    return incoming_source == "dense" and existing_source != "dense"
 
 
 def _fuse_results(
@@ -28,16 +31,19 @@ def _fuse_results(
     """Reciprocal Rank Fusion over two ranked lists, deduplicated by text."""
     scores: dict[str, float] = {}
     nodes_by_key: dict[str, TextNode] = {}
+    source_by_key: dict[str, str] = {}
 
-    for rank, node in enumerate(bm25_hits, 1):
-        key = node.text
-        scores[key] = scores.get(key, 0.0) + _rrf_score(rank)
-        nodes_by_key[key] = node
-
-    for rank, node in enumerate(dense_hits, 1):
-        key = node.text
-        scores[key] = scores.get(key, 0.0) + _rrf_score(rank)
-        nodes_by_key[key] = node
+    for source, hits in (("bm25", bm25_hits), ("dense", dense_hits)):
+        for rank, node in enumerate(hits, 1):
+            key = node.text
+            scores[key] = scores.get(key, 0.0) + _rrf_score(rank)
+            if key not in nodes_by_key:
+                nodes_by_key[key] = node
+                source_by_key[key] = source
+                continue
+            if _prefer_incoming_node(source_by_key[key], source):
+                nodes_by_key[key] = node
+                source_by_key[key] = source
 
     ranked_keys = sorted(scores, key=lambda k: scores[k], reverse=True)
     return [nodes_by_key[k] for k in ranked_keys]
@@ -51,38 +57,42 @@ def hybrid_retrieve(
 ) -> list[TextNode]:
     """Run BM25 + Qdrant retrieval, fuse with RRF, return top_k nodes."""
     from ingestion.index import load_bm25_index
-    from qdrant_client import QdrantClient
     from qdrant_client.models import FieldCondition, Filter, MatchValue
     from ingestion.embed import get_embed_model
+    import warnings
 
     # --- BM25 ---
     bm25_nodes: list[TextNode] = []
     if BM25_INDEX_PATH.exists():
         try:
             bm25_retriever = load_bm25_index(BM25_INDEX_PATH)
-            if bm25_retriever.bm25:                                      # B-3
+            if bm25_retriever.bm25:                                  # B-3
                 bm25_corpus_size = bm25_retriever.bm25.corpus_size
                 if bm25_corpus_size > 0:
                     bm25_retriever.similarity_top_k = min(top_k, bm25_corpus_size)
             bm25_results = bm25_retriever.retrieve(query)
             bm25_nodes = [r.node for r in bm25_results]
-            if company:                                                   # B-1
+            if company:                                               # B-1
                 bm25_nodes = [n for n in bm25_nodes if n.metadata.get("company") == company]
             if year:
                 bm25_nodes = [n for n in bm25_nodes if n.metadata.get("year") == year]
-        except Exception as exc:                                          # B-2
-            import warnings
+        except Exception as exc:                                      # B-2
             warnings.warn(
                 f"BM25 index load failed ({exc}); falling back to dense-only retrieval.",
                 stacklevel=2,
             )
+    else:
+        warnings.warn(
+            f"BM25 index not found at '{BM25_INDEX_PATH}'. Falling back to dense-only retrieval.",
+            stacklevel=2,
+        )
 
     # --- Qdrant dense ---
     dense_nodes: list[TextNode] = []
     embed_model = get_embed_model()
     query_embedding = embed_model.get_text_embedding(query)
 
-    client = QdrantClient(url=QDRANT_URL)
+    client = get_qdrant_client()
 
     filter_conditions = []
     if company:

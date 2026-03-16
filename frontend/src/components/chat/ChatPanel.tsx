@@ -22,7 +22,7 @@ function SkeletonMessage() {
 
 export function ChatPanel() {
   const [input, setInput] = useState('')
-  const { messages, isLoading, addMessage, setLoading, clearMessages, company, year, model } = useAppStore()
+  const { messages, isLoading, addMessage, setLoading, clearMessages, setModel, company, year, model } = useAppStore()
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const pendingRequest = useRef<AbortController | null>(null)
@@ -58,6 +58,9 @@ export function ChatPanel() {
         },
         controller.signal,
       )
+      if (result.fallback?.active_model) {
+        setModel(result.fallback.active_model.replace('openrouter/', ''))
+      }
       addMessage({
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -68,6 +71,7 @@ export function ChatPanel() {
         usage: result.usage,
         model: result.model,
         latency_ms: result.latency_ms,
+        fallback: result.fallback,
       })
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -75,17 +79,33 @@ export function ChatPanel() {
         if (axiosError.code === 'ERR_CANCELED') return
 
         const responseData = axiosError.response?.data
-        const msg =
-          (typeof responseData === 'object' && responseData !== null && 'detail' in responseData && typeof responseData.detail === 'string'
+        const detail = typeof responseData === 'object' && responseData !== null ? (responseData as { detail?: unknown }).detail : undefined
+        const hotDetail = detail !== undefined && typeof detail === 'object' && detail !== null && 'message' in detail && typeof (detail as { message?: unknown }).message === 'string'
+          ? (detail as { message?: string }).message
+          : undefined
+        const errMsg =
+          (typeof responseData === 'object' &&
+          responseData !== null &&
+          'detail' in responseData &&
+          typeof responseData.detail === 'string'
             ? responseData.detail
             : typeof responseData === 'string'
               ? responseData
-              : axiosError.message) || 'Request failed'
+              : hotDetail ?? axiosError.message) || 'Request failed'
 
+        const fallbackAttemptMsg = (() => {
+          if (axiosError.response?.status === 503 && detail && typeof detail === 'object' && 'attempted_models' in detail) {
+            const attempted = (detail as { attempted_models?: unknown }).attempted_models
+            if (Array.isArray(attempted)) {
+              return ` Models too hot across ${attempted.length} attempts.`
+            }
+          }
+          return ''
+        })()
         addMessage({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `Error: ${msg}`,
+          content: `Error: ${errMsg}${fallbackAttemptMsg}`,
         })
         return
       }
