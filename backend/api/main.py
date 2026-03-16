@@ -59,7 +59,11 @@ _ingestion_cache_expires_at: float = 0.0
 
 
 def _discover_ingestible_filenames() -> set[str]:
-    return {spec.path.name for spec in discover_pdfs(PDF_DIR)}
+    return {
+        spec.path.name
+        for spec in discover_pdfs(PDF_DIR)
+        if spec.doc_type != "OTHER"
+    }
 
 
 def _load_manifest() -> dict[str, dict]:
