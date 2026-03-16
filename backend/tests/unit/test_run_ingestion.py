@@ -17,10 +17,12 @@ from ingestion.run_ingestion import (
     _mark_pending,
     _mark_success,
     _migrate_registry_to_manifest,
+    _normalize_requested_specs,
     _parse_batch,
     _rebuild_bm25_for_indexed_docs,
     _save_chunk_artifact,
     _save_manifest,
+    main,
 )
 
 
@@ -208,6 +210,120 @@ def test_batch_selection_pending_always_requeued():
     batch, _, _ = _build_batch(_specs(), manifest, retry_failed=False, limit=None)
     names = {s.path.name for s in batch}
     assert "B_2022_10K.pdf" in names
+
+
+def test_normalize_requested_specs_uses_discovered_filename_matches():
+    specs = _specs()
+    selected = _normalize_requested_specs(["B_2022_10K.pdf"], specs)
+    assert [spec.path.name for spec in selected] == ["B_2022_10K.pdf"]
+
+
+def test_normalize_requested_specs_accepts_explicit_path(tmp_path):
+    pdf_path = tmp_path / "A_2022_10K.pdf"
+    pdf_path.write_text("placeholder")
+
+    selected = _normalize_requested_specs([str(pdf_path)], [])
+    assert len(selected) == 1
+    assert selected[0].path == pdf_path.resolve()
+    assert selected[0].company == "A"
+
+
+def test_normalize_requested_specs_rejects_missing_filename():
+    with pytest.raises(ValueError, match="not found under"):
+        _normalize_requested_specs(["MISSING.pdf"], _specs())
+
+
+def test_normalize_requested_specs_rejects_missing_path(tmp_path):
+    missing_path = tmp_path / "MISSING.pdf"
+    with pytest.raises(ValueError, match="does not exist"):
+        _normalize_requested_specs([str(missing_path)], [])
+
+
+def test_normalize_requested_specs_rejects_non_pdf_input():
+    with pytest.raises(ValueError, match="not a PDF"):
+        _normalize_requested_specs(["A_2022_10K.txt"], _specs())
+
+
+def test_normalize_requested_specs_deduplicates_repeated_requests():
+    selected = _normalize_requested_specs(
+        ["A_2022_10K.pdf", "A_2022_10K.pdf"],
+        _specs(),
+    )
+    assert [spec.path.name for spec in selected] == ["A_2022_10K.pdf"]
+
+
+def test_batch_selection_requested_specs_respects_failed_filter():
+    manifest = {"B_2022_10K.pdf": {"status": "failed"}}
+    selected_specs = [spec for spec in _specs() if spec.path.name == "B_2022_10K.pdf"]
+
+    batch, _, _ = _build_batch(selected_specs, manifest, retry_failed=False, limit=None)
+    assert batch == []
+
+
+def test_batch_selection_requested_specs_retry_failed_includes_doc():
+    manifest = {"B_2022_10K.pdf": {"status": "failed"}}
+    selected_specs = [spec for spec in _specs() if spec.path.name == "B_2022_10K.pdf"]
+
+    batch, _, _ = _build_batch(selected_specs, manifest, retry_failed=True, limit=None)
+    assert [spec.path.name for spec in batch] == ["B_2022_10K.pdf"]
+
+
+def test_batch_selection_requested_specs_applies_limit():
+    batch, _, _ = _build_batch(_specs(), {}, retry_failed=False, limit=1)
+    assert [spec.path.name for spec in batch] == ["A_2022_10K.pdf"]
+
+
+def test_main_list_scopes_status_to_requested_pdfs(monkeypatch, capsys):
+    from ingestion import run_ingestion as ri
+
+    monkeypatch.setattr(
+        ri,
+        "_discover_pdfs",
+        lambda: [
+            DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022"),
+            DocSpec(path=Path("/tmp/B_2022_10K.pdf"), company="B", year="2022"),
+            DocSpec(path=Path("/tmp/C_2022_10K.pdf"), company="C", year="2022"),
+        ],
+    )
+    monkeypatch.setattr(
+        ri,
+        "_load_manifest",
+        lambda: {
+            "A_2022_10K.pdf": {"status": "success"},
+            "B_2022_10K.pdf": {"status": "failed"},
+        },
+    )
+    monkeypatch.setattr("sys.argv", ["run_ingestion.py", "--list", "--pdf", "B_2022_10K.pdf"])
+
+    main()
+
+    out = capsys.readouterr().out
+    assert "Total PDFs found : 1" in out
+    assert "Successful       : 0" in out
+    assert "Failed           : 1" in out
+    assert "Pending          : 0" in out
+    assert "B_2022_10K.pdf" not in out
+
+
+def test_main_rejects_invalid_requested_pdf_before_mutation(monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    called = False
+
+    def _unexpected_manifest_load():
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(ri, "_discover_pdfs", lambda: [])
+    monkeypatch.setattr(ri, "_load_manifest", _unexpected_manifest_load)
+    monkeypatch.setattr("sys.argv", ["run_ingestion.py", "--pdf", "missing.pdf"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert called is False
 
 
 def test_migrate_registry_to_manifest(tmp_path, monkeypatch):

@@ -3,6 +3,7 @@ run_ingestion.py — CLI entrypoint for the offline ingestion pipeline.
 
 Usage (from backend/):
   uv run python -m ingestion.run_ingestion --list         # show status (no ingestion)
+  uv run python -m ingestion.run_ingestion --pdf A.pdf    # ingest one named PDF
   uv run python -m ingestion.run_ingestion --limit 10     # ingest next 10 unprocessed docs
   uv run python -m ingestion.run_ingestion                # ingest ALL remaining docs
 
@@ -51,6 +52,53 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 def _discover_pdfs() -> list[DocSpec]:
     """Glob PDF_DIR for *.pdf files and return a DocSpec for every one found."""
     return discover_pdfs(PDF_DIR)
+
+
+def _normalize_requested_specs(
+    requested_pdfs: list[str] | None,
+    all_specs: list[DocSpec],
+) -> list[DocSpec]:
+    """Validate explicit PDF selections and return the matching DocSpecs.
+
+    Supports either bare filenames relative to PDF_DIR or explicit filesystem paths.
+    Rejects missing files, non-PDF inputs, and duplicate/ambiguous basename collisions.
+    """
+    if not requested_pdfs:
+        return all_specs
+
+    discovered_by_name = {spec.path.name: spec for spec in all_specs}
+    selected_by_name: dict[str, DocSpec] = {}
+
+    for raw_value in requested_pdfs:
+        requested = Path(raw_value)
+        if requested.suffix.lower() != ".pdf":
+            raise ValueError(f"Requested input is not a PDF: {raw_value}")
+
+        if requested.parent == Path("."):
+            spec = discovered_by_name.get(requested.name)
+            if spec is None:
+                raise ValueError(
+                    f"Requested PDF was not found under {PDF_DIR}: {requested.name}"
+                )
+        else:
+            resolved = requested.expanduser().resolve()
+            if not resolved.exists():
+                raise ValueError(f"Requested PDF does not exist: {raw_value}")
+            spec = discover_pdfs(resolved.parent)
+            matches = [candidate for candidate in spec if candidate.path.resolve() == resolved]
+            if not matches:
+                raise ValueError(f"Requested PDF could not be loaded: {raw_value}")
+            spec = matches[0]
+
+        existing = selected_by_name.get(spec.path.name)
+        if existing is not None and existing.path.resolve() != spec.path.resolve():
+            raise ValueError(
+                f"Requested PDFs collide on filename '{spec.path.name}'. "
+                "Use unique basenames for targeted ingestion."
+            )
+        selected_by_name[spec.path.name] = spec
+
+    return list(selected_by_name.values())
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +424,13 @@ def _rebuild_bm25_for_indexed_docs(
 def main() -> None:
     parser = argparse.ArgumentParser(description="FinLens incremental ingestion pipeline")
     parser.add_argument(
+        "--pdf",
+        action="append",
+        default=None,
+        metavar="PDF",
+        help="Target one or more PDFs by filename under the discovery directory or by path",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -408,22 +463,34 @@ def main() -> None:
 
     # Discover all PDFs and load manifest
     all_specs = _discover_pdfs()
+    try:
+        selected_specs = _normalize_requested_specs(args.pdf, all_specs)
+    except ValueError as exc:
+        parser.error(str(exc))
     manifest = _load_manifest()
     batch, success_set, failed_set = _build_batch(
-        all_specs=all_specs,
+        all_specs=selected_specs,
         manifest=manifest,
         retry_failed=args.retry_failed,
         limit=args.limit,
     )
     pending = [
-        s for s in all_specs if s.path.name not in success_set and s.path.name not in failed_set
+        s
+        for s in selected_specs
+        if s.path.name not in success_set and s.path.name not in failed_set
     ]
 
     if args.list:
         print(f"Ingestion status:")
-        print(f"  Total PDFs found : {len(all_specs)}")
-        print(f"  Successful       : {len(success_set)}")
-        print(f"  Failed           : {len(failed_set)}")
+        print(f"  Total PDFs found : {len(selected_specs)}")
+        print(
+            f"  Successful       : "
+            f"{sum(1 for s in selected_specs if s.path.name in success_set)}"
+        )
+        print(
+            f"  Failed           : "
+            f"{sum(1 for s in selected_specs if s.path.name in failed_set)}"
+        )
         print(f"  Pending          : {len(pending)}")
         if batch:
             print(f"\nNext {len(batch)} doc(s) to ingest:")

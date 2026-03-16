@@ -153,6 +153,29 @@ cd backend
 uv run python -m ingestion.run_ingestion
 ```
 
+### Ingest one specific PDF
+
+By discovered filename:
+
+```bash
+cd backend
+uv run python -m ingestion.run_ingestion --pdf 3M_2022_10K.pdf
+```
+
+By path:
+
+```bash
+cd backend
+uv run python -m ingestion.run_ingestion --pdf ../data/financebench/pdfs/3M_2022_10K.pdf
+```
+
+### Ingest multiple specific PDFs
+
+```bash
+cd backend
+uv run python -m ingestion.run_ingestion --pdf 3M_2022_10K.pdf --pdf 3M_2022_10K_10.pdf
+```
+
 ### Change the parse worker count
 
 ```bash
