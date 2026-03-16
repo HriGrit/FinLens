@@ -7,7 +7,7 @@ import { usePolling } from '../../hooks/usePolling'
 import { getFreeModels, getServicesStatus, getIngestionStatus } from '../../api/client'
 
 export function Sidebar() {
-  const {
+  const { 
     health,
     ingestion,
     freeModels,
@@ -89,13 +89,15 @@ export function Sidebar() {
         <span className="font-mono text-[10px] uppercase tracking-widest text-text-secondary">Filters</span>
         <div className="flex flex-col gap-1">
           <label className="font-mono text-[10px] text-muted">Model</label>
-          <select
+        <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
             className="w-full bg-bg border border-border rounded px-2 py-1.5 text-xs font-mono text-text-primary focus:outline-none focus:border-amber-500/50"
           >
             {isLoadingModels && (
-              <option value="openrouter/free">Loading free models...</option>
+              <option value={model} disabled>
+                Loading free models...
+              </option>
             )}
             {!isLoadingModels &&
               freeModels.map((option) => (

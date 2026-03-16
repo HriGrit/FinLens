@@ -4,6 +4,34 @@ import importlib
 from unittest.mock import patch
 
 
+def test_get_qdrant_client_default_timeout(monkeypatch):
+    """QdrantClient receives timeout=60 by default."""
+    monkeypatch.delenv("QDRANT_TIMEOUT", raising=False)
+    monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+
+    with patch("qdrant_client.QdrantClient") as mock_client:
+        import shared.qdrant as m
+
+        importlib.reload(m)
+        m.get_qdrant_client()
+
+    assert mock_client.call_args.kwargs["timeout"] == 60
+
+
+def test_get_qdrant_client_custom_timeout(monkeypatch):
+    """QdrantClient receives timeout from QDRANT_TIMEOUT env var."""
+    monkeypatch.setenv("QDRANT_TIMEOUT", "120")
+    monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+
+    with patch("qdrant_client.QdrantClient") as mock_client:
+        import shared.qdrant as m
+
+        importlib.reload(m)
+        m.get_qdrant_client()
+
+    assert mock_client.call_args.kwargs["timeout"] == 120
+
+
 def test_get_qdrant_client_no_api_key(monkeypatch):
     """Without QDRANT_API_KEY, client is constructed without api_key kwarg."""
     monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")

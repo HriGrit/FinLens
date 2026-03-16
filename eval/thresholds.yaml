@@ -1,3 +1,5 @@
 faithfulness: 0.80
 context_recall: 0.75
 answer_relevancy: 0.80
+answer_correctness: 0.70
+answer_correctness: 0.70

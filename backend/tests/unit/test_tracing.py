@@ -153,7 +153,7 @@ def test_pipeline_records_hybrid_retrieve_span_output(monkeypatch: pytest.Monkey
     monkeypatch.setattr(retrieval.pipeline, "hybrid_retrieve", lambda *_args, **_kwargs: candidates)
     monkeypatch.setattr(retrieval.pipeline, "rerank", lambda *_args, **_kwargs: reranked)
 
-    nodes, n_candidates = retrieval.pipeline.retrieve_and_rerank(
+    result = retrieval.pipeline.retrieve_and_rerank(
         query="revenue",
         retrieval_top_k=3,
         rerank_top_k=1,
@@ -162,8 +162,8 @@ def test_pipeline_records_hybrid_retrieve_span_output(monkeypatch: pytest.Monkey
         trace=trace,
     )
 
-    assert nodes == reranked
-    assert n_candidates == len(candidates)
+    assert result.nodes == reranked
+    assert result.candidate_count == len(candidates)
     assert len(trace.spans) == 2
     assert trace.spans[0][0] == "hybrid_retrieve"
     assert trace.spans[0][1] == {"query": "revenue", "top_k": 3}
@@ -185,7 +185,7 @@ def test_pipeline_no_double_end_on_empty_candidates(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(retrieval.pipeline, "hybrid_retrieve", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(retrieval.pipeline, "rerank", fake_rerank)
 
-    nodes, n_candidates = retrieval.pipeline.retrieve_and_rerank(
+    result = retrieval.pipeline.retrieve_and_rerank(
         query="empty",
         retrieval_top_k=5,
         rerank_top_k=2,
@@ -194,8 +194,8 @@ def test_pipeline_no_double_end_on_empty_candidates(monkeypatch: pytest.MonkeyPa
         trace=trace,
     )
 
-    assert nodes == []
-    assert n_candidates == 0
+    assert result.nodes == []
+    assert result.candidate_count == 0
     assert not rerank_called
     assert len(trace.spans) == 1
     assert trace.spans[0][0] == "hybrid_retrieve"
@@ -209,12 +209,12 @@ def test_pipeline_with_none_trace_does_not_use_span(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(retrieval.pipeline, "hybrid_retrieve", lambda *_args, **_kwargs: _record_call(calls, "hybrid") or candidates)
     monkeypatch.setattr(retrieval.pipeline, "rerank", lambda *_args, **_kwargs: _record_call(calls, "rerank") or candidates[:1])
 
-    nodes, n_candidates = retrieval.pipeline.retrieve_and_rerank(
+    result = retrieval.pipeline.retrieve_and_rerank(
         query="q", retrieval_top_k=2, rerank_top_k=1, trace=None
     )
 
-    assert nodes == candidates[:1]
-    assert n_candidates == len(candidates)
+    assert result.nodes == candidates[:1]
+    assert result.candidate_count == len(candidates)
     assert calls == ["hybrid", "rerank"]
 
 

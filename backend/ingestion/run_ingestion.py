@@ -3,6 +3,7 @@ run_ingestion.py — CLI entrypoint for the offline ingestion pipeline.
 
 Usage (from backend/):
   uv run python -m ingestion.run_ingestion --list         # show status (no ingestion)
+  uv run python -m ingestion.run_ingestion --pdf A.pdf    # ingest one named PDF
   uv run python -m ingestion.run_ingestion --limit 10     # ingest next 10 unprocessed docs
   uv run python -m ingestion.run_ingestion                # ingest ALL remaining docs
 
@@ -18,13 +19,15 @@ import json
 import os
 import pickle
 import sys
+
+from qdrant_client.http.exceptions import ResponseHandlingException
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .chunk import split_paragraph_nodes
-from .discovery import PDF_DIR, DocSpec, discover_pdfs, parse_pdf_filename
+from .discovery import PDF_DIR, DocSpec, discover_pdfs
 from .index import build_bm25_index, build_qdrant_index
 from .parse import assert_node_metadata
 from llama_index.core.schema import TextNode
@@ -46,29 +49,56 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 # Document discovery
 # ---------------------------------------------------------------------------
 
-def _parse_pdf_filename(pdf_path: Path) -> DocSpec | None:
-    """Parse {COMPANY}_{YEAR}_{DOCTYPE}.pdf into a DocSpec. Returns None if unparseable."""
-    spec = parse_pdf_filename(pdf_path)
-    if spec is None:
-        print(f"  WARN — skipping unparseable filename: {pdf_path.name}")
-        return None
-    return spec
-
-
 def _discover_pdfs() -> list[DocSpec]:
-    """Glob PDF_DIR for *.pdf files and parse each into a DocSpec."""
-    known_specs = {spec.path.name: spec for spec in discover_pdfs(PDF_DIR)}
-    if not PDF_DIR.exists():
-        return []
+    """Glob PDF_DIR for *.pdf files and return a DocSpec for every one found."""
+    return discover_pdfs(PDF_DIR)
 
-    specs: list[DocSpec] = []
-    for pdf_path in sorted(PDF_DIR.glob("*.pdf")):
-        spec = known_specs.get(pdf_path.name)
-        if spec is not None:
-            specs.append(spec)
+
+def _normalize_requested_specs(
+    requested_pdfs: list[str] | None,
+    all_specs: list[DocSpec],
+) -> list[DocSpec]:
+    """Validate explicit PDF selections and return the matching DocSpecs.
+
+    Supports either bare filenames relative to PDF_DIR or explicit filesystem paths.
+    Rejects missing files, non-PDF inputs, and duplicate/ambiguous basename collisions.
+    """
+    if not requested_pdfs:
+        return all_specs
+
+    discovered_by_name = {spec.path.name: spec for spec in all_specs}
+    selected_by_name: dict[str, DocSpec] = {}
+
+    for raw_value in requested_pdfs:
+        requested = Path(raw_value)
+        if requested.suffix.lower() != ".pdf":
+            raise ValueError(f"Requested input is not a PDF: {raw_value}")
+
+        if requested.parent == Path("."):
+            spec = discovered_by_name.get(requested.name)
+            if spec is None:
+                raise ValueError(
+                    f"Requested PDF was not found under {PDF_DIR}: {requested.name}"
+                )
         else:
-            _parse_pdf_filename(pdf_path)
-    return specs
+            resolved = requested.expanduser().resolve()
+            if not resolved.exists():
+                raise ValueError(f"Requested PDF does not exist: {raw_value}")
+            spec = discover_pdfs(resolved.parent)
+            matches = [candidate for candidate in spec if candidate.path.resolve() == resolved]
+            if not matches:
+                raise ValueError(f"Requested PDF could not be loaded: {raw_value}")
+            spec = matches[0]
+
+        existing = selected_by_name.get(spec.path.name)
+        if existing is not None and existing.path.resolve() != spec.path.resolve():
+            raise ValueError(
+                f"Requested PDFs collide on filename '{spec.path.name}'. "
+                "Use unique basenames for targeted ingestion."
+            )
+        selected_by_name[spec.path.name] = spec
+
+    return list(selected_by_name.values())
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +167,33 @@ def _mark_pending(manifest: dict[str, dict[str, Any]], filename: str) -> None:
     }
 
 
-def _mark_success(manifest: dict[str, dict[str, Any]], filename: str, chunk_count: int) -> None:
-    """Write success status with chunk count."""
+def _mark_success(
+    manifest: dict[str, dict[str, Any]],
+    filename: str,
+    chunk_count: int,
+    *,
+    verify_artifact: bool = True,
+) -> None:
+    """Write success status with chunk count.
+
+    I6: When verify_artifact=True (default), asserts that the chunk artifact file
+    exists and is readable before recording success. Raises RuntimeError if not.
+    """
+    if verify_artifact:
+        artifact_path = CHUNKS_DIR / f"{Path(filename).stem}.pkl"
+        if not artifact_path.exists():
+            raise RuntimeError(
+                f"I6: Cannot mark {filename!r} as success — chunk artifact not found at "
+                f"{artifact_path}. Ingestion may be incomplete."
+            )
+        try:
+            with open(artifact_path, "rb") as _fh:
+                pickle.load(_fh)
+        except Exception as exc:
+            raise RuntimeError(
+                f"I6: Chunk artifact for {filename!r} exists but is not readable: {exc}"
+            ) from exc
+
     previous = manifest.get(filename, {})
     manifest[filename] = {
         "status": "success",
@@ -171,15 +226,31 @@ def _save_chunk_artifact(filename: str, chunks: list[TextNode]) -> None:
 
 
 def _load_existing_bm25_nodes() -> list[TextNode]:
-    """Return the raw node list from an existing BM25 pickle, or [] if none."""
+    """Return the raw node list from an existing BM25 pickle, or [] if none.
+
+    X1: Uses load_bm25_index() to respect the versioned serialization contract,
+    then extracts the underlying node corpus for re-use.
+    """
     if not BM25_INDEX_PATH.exists():
         return []
-    with open(BM25_INDEX_PATH, "rb") as f:
-        payload = pickle.load(f)
-    if not isinstance(payload, dict):
+    try:
+        from .index import load_bm25_index
+        retriever = load_bm25_index(BM25_INDEX_PATH)
+        # BM25Retriever stores the original nodes in .index.corpus or can be
+        # accessed via the private _nodes attribute; fall back to pickle direct read
+        # for the corpus only when needed.
+        nodes = getattr(retriever, "_nodes", None)
+        if nodes is not None and isinstance(nodes, list):
+            return nodes
+        # Fallback: reload the payload dict directly to extract the node corpus
+        with open(BM25_INDEX_PATH, "rb") as f:
+            payload = pickle.load(f)
+        if not isinstance(payload, dict):
+            return []
+        raw_nodes = payload.get("nodes", [])
+        return raw_nodes if isinstance(raw_nodes, list) else []
+    except Exception:
         return []
-    nodes = payload.get("nodes", [])
-    return nodes if isinstance(nodes, list) else []
 
 
 def _load_chunk_artifacts_for_successful_docs(
@@ -353,6 +424,13 @@ def _rebuild_bm25_for_indexed_docs(
 def main() -> None:
     parser = argparse.ArgumentParser(description="FinLens incremental ingestion pipeline")
     parser.add_argument(
+        "--pdf",
+        action="append",
+        default=None,
+        metavar="PDF",
+        help="Target one or more PDFs by filename under the discovery directory or by path",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -385,22 +463,34 @@ def main() -> None:
 
     # Discover all PDFs and load manifest
     all_specs = _discover_pdfs()
+    try:
+        selected_specs = _normalize_requested_specs(args.pdf, all_specs)
+    except ValueError as exc:
+        parser.error(str(exc))
     manifest = _load_manifest()
     batch, success_set, failed_set = _build_batch(
-        all_specs=all_specs,
+        all_specs=selected_specs,
         manifest=manifest,
         retry_failed=args.retry_failed,
         limit=args.limit,
     )
     pending = [
-        s for s in all_specs if s.path.name not in success_set and s.path.name not in failed_set
+        s
+        for s in selected_specs
+        if s.path.name not in success_set and s.path.name not in failed_set
     ]
 
     if args.list:
         print(f"Ingestion status:")
-        print(f"  Total PDFs found : {len(all_specs)}")
-        print(f"  Successful       : {len(success_set)}")
-        print(f"  Failed           : {len(failed_set)}")
+        print(f"  Total PDFs found : {len(selected_specs)}")
+        print(
+            f"  Successful       : "
+            f"{sum(1 for s in selected_specs if s.path.name in success_set)}"
+        )
+        print(
+            f"  Failed           : "
+            f"{sum(1 for s in selected_specs if s.path.name in failed_set)}"
+        )
         print(f"  Pending          : {len(pending)}")
         if batch:
             print(f"\nNext {len(batch)} doc(s) to ingest:")
@@ -482,6 +572,26 @@ def main() -> None:
         except Exception as exc:
             _mark_failed(manifest, filename, str(exc))
             _save_manifest(manifest)
+            is_timeout = False
+            current = exc
+            while current is not None:
+                if isinstance(current, ResponseHandlingException):
+                    is_timeout = True
+                    break
+                current_type = type(current)
+                if current_type.__name__ == "ReadTimeout" and current_type.__module__.startswith(("httpx", "httpcore")):
+                    is_timeout = True
+                    break
+                current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+            if is_timeout:
+                print(
+                    f"\n[ERROR] Qdrant upsert timed out for '{filename}' after all retries.\n"
+                    f"  Cause : {exc}\n"
+                    f"  Fix   : Increase QDRANT_TIMEOUT (current default: 60s) or reduce "
+                    f"_UPSERT_BATCH_SIZE in index.py\n"
+                    f"  State : manifest updated; re-run ingestion to retry this document."
+                )
+                sys.exit(1)
             if not args.continue_on_error:
                 raise
 

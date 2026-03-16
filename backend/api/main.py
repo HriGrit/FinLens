@@ -12,6 +12,7 @@ Routes:
 import os
 import json
 import asyncio
+import logging
 import dataclasses
 import time
 from pathlib import Path
@@ -22,7 +23,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
-from generation.generate import DEFAULT_MODEL, generate, register_langfuse_callbacks
+from generation.generate import (
+    DEFAULT_MODEL,
+    AllModelsTooHotError,
+    MalformedGenerationResponseError,
+    generate,
+    register_langfuse_callbacks,
+)
 from generation.openrouter_models import get_free_models
 from ingestion.discovery import discover_pdfs
 from observability.tracing import create_trace
@@ -36,6 +43,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FinLens API", version="0.1.0", lifespan=_lifespan)
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,7 +62,11 @@ _ingestion_cache_expires_at: float = 0.0
 
 
 def _discover_ingestible_filenames() -> set[str]:
-    return {spec.path.name for spec in discover_pdfs(PDF_DIR)}
+    return {
+        spec.path.name
+        for spec in discover_pdfs(PDF_DIR)
+        if spec.doc_type != "OTHER"
+    }
 
 
 def _load_manifest() -> dict[str, dict]:
@@ -86,8 +98,8 @@ class ChatRequest(BaseModel):
     company: str | None = None
     year: str | None = None
     model: str | None = None
-    retrieval_top_k: int = 20
-    rerank_top_k: int = 5
+    retrieval_top_k: int = Field(default=20, gt=0)
+    rerank_top_k: int = Field(default=5, gt=0)
 
     @field_validator("query", mode="before")
     @classmethod
@@ -100,9 +112,35 @@ class ChatResponse(BaseModel):
     citations: list[dict]
     usage: dict
     model: str
+    fallback: ChatFallbackState | None = None
     latency_ms: int
     trace_id: str
     reasoning: dict
+
+
+class FallbackEvent(BaseModel):
+    from_model: str
+    to_model: str
+    reason: str
+
+
+class ChatFallbackState(BaseModel):
+    requested_model: str
+    active_model: str
+    fallback_used: bool
+    fallback_attempts: int
+    attempted_models: list[str]
+    events: list[FallbackEvent]
+
+
+class ProvidersTooHotResponse(BaseModel):
+    code: str
+    message: str
+    requested_model: str
+    active_model: str
+    attempted_models: list[str]
+    fallback_attempts: int
+    events: list[FallbackEvent]
 
 
 class FreeModelResponse(BaseModel):
@@ -122,7 +160,11 @@ def free_models() -> list[FreeModelResponse]:
     return [FreeModelResponse(**dataclasses.asdict(model)) for model in get_free_models()]
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    responses={503: {"model": ProvidersTooHotResponse}},
+)
 def chat(request: ChatRequest) -> ChatResponse:
     t0 = time.perf_counter()
     trace = create_trace(
@@ -131,14 +173,18 @@ def chat(request: ChatRequest) -> ChatResponse:
     )
     retrieval_ms_start = time.perf_counter()
 
-    nodes, n_candidates = retrieve_and_rerank(
-        query=request.query,
-        retrieval_top_k=request.retrieval_top_k,
-        rerank_top_k=request.rerank_top_k,
-        company=request.company,
-        year=request.year,
-        trace=trace,
-    )
+    try:
+        retrieval_result = retrieve_and_rerank(
+            query=request.query,
+            retrieval_top_k=request.retrieval_top_k,
+            rerank_top_k=request.rerank_top_k,
+            company=request.company,
+            year=request.year,
+            trace=trace,
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Retrieval backend failure.")
+    nodes = retrieval_result.nodes
     retrieval_ms = int((time.perf_counter() - retrieval_ms_start) * 1000)
 
     if not nodes:
@@ -152,8 +198,26 @@ def chat(request: ChatRequest) -> ChatResponse:
             model=request.model or DEFAULT_MODEL,
             trace=trace,
         )
+    except AllModelsTooHotError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "providers_too_hot",
+                "message": "Generation is temporarily unavailable because model providers are too hot.",
+                "requested_model": exc.requested_model,
+                "active_model": exc.active_model,
+                "attempted_models": exc.attempted_models,
+                "fallback_attempts": exc.fallback_attempts,
+                "events": [event.model_dump() for event in exc.events],
+            },
+        )
+    except MalformedGenerationResponseError:
+        raise HTTPException(status_code=502, detail="Malformed upstream generation response.")
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except Exception:
+        logger.exception("Generation failed for model=%s", request.model)
+        raise HTTPException(status_code=502, detail="Generation backend failure.")
     generation_ms = int((time.perf_counter() - generation_ms_start) * 1000)
 
     reasoning = _build_reasoning(
@@ -161,11 +225,12 @@ def chat(request: ChatRequest) -> ChatResponse:
         trace_id=trace.id,
         request=request,
         context_nodes=nodes,
-        n_candidates=n_candidates,
+        n_candidates=retrieval_result.candidate_count,
         generation_model=result["model"],
         usage=result["usage"],
         retrieval_ms=retrieval_ms,
         generation_ms=generation_ms,
+        model_reasoning=result.get("model_reasoning"),
     )
 
     trace.update(output=result["answer"])
@@ -188,6 +253,7 @@ def _build_reasoning(
     usage: dict,
     retrieval_ms: int,
     generation_ms: int,
+    model_reasoning: str | None = None,
 ) -> dict:
     top_sources = []
     for node in context_nodes[:3]:
@@ -200,7 +266,7 @@ def _build_reasoning(
             }
         )
 
-    return {
+    result: dict = {
         "summary": (
             f"FinLens answered '{query}' using {len(context_nodes)} reranked chunks "
             f"from Langfuse trace {trace_id}."
@@ -226,6 +292,9 @@ def _build_reasoning(
             "cost_usd": usage.get("cost_usd"),
         },
     }
+    if model_reasoning is not None:
+        result["model_reasoning"] = model_reasoning
+    return result
 
 
 @app.get("/status/ingestion")

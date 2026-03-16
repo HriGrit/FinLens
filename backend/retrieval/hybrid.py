@@ -19,6 +19,11 @@ def _rrf_score(rank: int, k: int = RRF_K) -> float:
     return 1.0 / (k + rank)
 
 
+def _prefer_incoming_node(existing_source: str, incoming_source: str) -> bool:
+    """Explicit duplicate policy: dense metadata wins for identical text."""
+    return incoming_source == "dense" and existing_source != "dense"
+
+
 def _fuse_results(
     bm25_hits: list[TextNode],
     dense_hits: list[TextNode],
@@ -26,16 +31,19 @@ def _fuse_results(
     """Reciprocal Rank Fusion over two ranked lists, deduplicated by text."""
     scores: dict[str, float] = {}
     nodes_by_key: dict[str, TextNode] = {}
+    source_by_key: dict[str, str] = {}
 
-    for rank, node in enumerate(bm25_hits, 1):
-        key = node.text
-        scores[key] = scores.get(key, 0.0) + _rrf_score(rank)
-        nodes_by_key[key] = node
-
-    for rank, node in enumerate(dense_hits, 1):
-        key = node.text
-        scores[key] = scores.get(key, 0.0) + _rrf_score(rank)
-        nodes_by_key[key] = node
+    for source, hits in (("bm25", bm25_hits), ("dense", dense_hits)):
+        for rank, node in enumerate(hits, 1):
+            key = node.text
+            scores[key] = scores.get(key, 0.0) + _rrf_score(rank)
+            if key not in nodes_by_key:
+                nodes_by_key[key] = node
+                source_by_key[key] = source
+                continue
+            if _prefer_incoming_node(source_by_key[key], source):
+                nodes_by_key[key] = node
+                source_by_key[key] = source
 
     ranked_keys = sorted(scores, key=lambda k: scores[k], reverse=True)
     return [nodes_by_key[k] for k in ranked_keys]

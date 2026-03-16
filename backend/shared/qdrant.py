@@ -5,6 +5,8 @@ from qdrant_client import QdrantClient
 DEFAULT_QDRANT_URL = "http://localhost:6333"
 DEFAULT_QDRANT_COLLECTION = "finlens_chunks_dev"
 
+_DEFAULT_QDRANT_TIMEOUT = 60  # seconds; raise via QDRANT_TIMEOUT env var if upserts still timeout
+
 
 def get_qdrant_url() -> str:
     """Return the configured Qdrant URL."""
@@ -26,4 +28,5 @@ def get_qdrant_client() -> QdrantClient:
     api_key = os.getenv("QDRANT_API_KEY")
     if api_key:
         kwargs["api_key"] = api_key
+    kwargs["timeout"] = int(os.getenv("QDRANT_TIMEOUT", str(_DEFAULT_QDRANT_TIMEOUT)))
     return QdrantClient(**kwargs)
