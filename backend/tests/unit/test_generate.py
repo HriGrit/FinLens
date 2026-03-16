@@ -103,3 +103,24 @@ def test_generate_sets_cost_to_none_when_cost_calculation_fails(monkeypatch) -> 
     )
 
     assert result["usage"]["cost_usd"] is None
+
+
+def test_generate_normalizes_providerless_openrouter_model_ids(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_completion(*args, **kwargs):
+        captured["model"] = kwargs["model"]
+        return _valid_response()
+
+    monkeypatch.setattr("generation.generate.litellm.completion", fake_completion)
+    monkeypatch.setattr("generation.generate.litellm.completion_cost", lambda **kwargs: 0.0)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    result = gen.generate(
+        query="What is this?",
+        context_nodes=[TextNode(text="chunk", metadata={})],
+        model="qwen/qwen3-4b:free",
+    )
+
+    assert captured["model"] == "openrouter/qwen/qwen3-4b:free"
+    assert result["model"] == "openrouter/qwen/qwen3-4b:free"

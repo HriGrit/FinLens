@@ -24,7 +24,7 @@ def test_full_rag_query_uses_live_openrouter(
     if not nodes:
         pytest.skip("No live retrieval candidates were returned.")
 
-    output = generate(query=query, context_nodes=nodes, model=os.getenv("OPENROUTER_TEST_MODEL", "openrouter/stepfun/step-3.5-flash:free"))
+    output = generate(query=query, context_nodes=nodes, model=os.getenv("OPENROUTER_TEST_MODEL", "qwen/qwen3-4b:free"))
 
     assert output["answer"]
     assert output["citations"]

@@ -14,8 +14,34 @@ from llama_index.core.schema import TextNode
 
 from .prompt import build_prompt
 
-DEFAULT_MODEL = "openrouter/stepfun/step-3.5-flash:free"
+DEFAULT_MODEL = "qwen/qwen3-4b:free"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_PROVIDER_PREFIX = "openrouter/"
+KNOWN_PROVIDER_PREFIXES = (
+    "openrouter/",
+    "openai/",
+    "azure/",
+    "anthropic/",
+    "bedrock/",
+    "vertex_ai/",
+    "gemini/",
+    "google/",
+    "huggingface/",
+    "ollama/",
+    "replicate/",
+    "groq/",
+    "cohere/",
+    "mistral/",
+    "together_ai/",
+    "fireworks_ai/",
+    "xai/",
+    "deepseek/",
+    "perplexity/",
+    "cerebras/",
+    "databricks/",
+    "predibase/",
+    "watsonx/",
+)
 
 
 class MalformedGenerationResponseError(ValueError):
@@ -26,6 +52,21 @@ def register_langfuse_callbacks() -> None:
     """Install LiteLLM -> Langfuse callbacks. Call at app startup, never at import."""
     litellm.success_callback = ["langfuse"]
     litellm.failure_callback = ["langfuse"]
+
+
+def _normalize_model_name(model: str) -> str:
+    """Normalize frontend/OpenRouter model ids into LiteLLM-compatible names."""
+
+    if model == "openrouter/free":
+        return DEFAULT_MODEL
+
+    if model.startswith(KNOWN_PROVIDER_PREFIXES):
+        return model
+
+    if "/" in model:
+        return f"{OPENROUTER_PROVIDER_PREFIX}{model}"
+
+    return model
 
 
 def _validated_answer_and_usage(response: Any) -> tuple[str, dict[str, int]]:
@@ -68,6 +109,8 @@ def generate(
     messages = build_prompt(query, context_nodes)
 
     lf_metadata = {"existing_trace_id": trace.id, "generation_name": "llm_call"} if trace else {}
+
+    model = _normalize_model_name(model)
 
     response = litellm.completion(
         model=model,
