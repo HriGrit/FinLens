@@ -33,8 +33,15 @@ from generation.generate import (
 from generation.openrouter_models import get_free_models
 from ingestion.discovery import discover_pdfs
 from observability.tracing import create_trace
+from observability.tracing import get_langfuse_host, get_langfuse_mode, has_langfuse_credentials
 from retrieval.pipeline import retrieve_and_rerank
-from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
+from shared.qdrant import (
+    HOSTED_MODE,
+    QDRANT_COLLECTION,
+    get_qdrant_client,
+    get_qdrant_config_error,
+    get_qdrant_mode,
+)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -52,7 +59,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-LANGFUSE_URL = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
 MANIFEST_PATH = Path(__file__).resolve().parents[2] / "data" / "ingestion_manifest.json"
 PDF_DIR = Path(__file__).resolve().parents[2] / "data" / "financebench" / "pdfs"
 INGESTION_CACHE_TTL = 30  # seconds
@@ -349,7 +355,7 @@ def ingestion_status() -> dict:
         _ingestion_cache = result
         _ingestion_cache_expires_at = now + INGESTION_CACHE_TTL
         return result
-    except Exception:
+    except Exception as exc:
         try:
             ingestible_filenames = _discover_ingestible_filenames()
             manifest = _load_manifest()
@@ -375,6 +381,7 @@ def ingestion_status() -> dict:
             "pending_documents": len(ingestible_filenames - indexed_filenames - failed_filenames),
             "failed_documents": len(failed_filenames),
             "status": "error",
+            "detail": f"Qdrant status unavailable: {exc}",
         }
         _ingestion_cache = result
         _ingestion_cache_expires_at = now + INGESTION_CACHE_TTL
@@ -396,21 +403,41 @@ async def services_status() -> dict:
         except Exception as exc:
             return {"status": "error", "latency_ms": -1, "detail": str(exc)}
 
+    async def _langfuse_health_status() -> dict:
+        langfuse_url = get_langfuse_host()
+        if get_langfuse_mode() == "hosted" and not has_langfuse_credentials():
+            return {
+                "status": "disabled",
+                "latency_ms": -1,
+                "detail": "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY required in hosted mode",
+            }
+        return await _check(f"{langfuse_url}/api/public/health")
+
     async def _check_qdrant() -> dict:
         start = time.perf_counter()
         try:
+            if get_qdrant_mode() == HOSTED_MODE:
+                config_error = get_qdrant_config_error()
+                if config_error:
+                    return {
+                        "status": "disabled",
+                        "latency_ms": -1,
+                        "detail": config_error,
+                    }
             await asyncio.to_thread(lambda: get_qdrant_client().get_collections())
             return {
                 "status": "ok",
                 "latency_ms": int((time.perf_counter() - start) * 1000),
                 "detail": "collections endpoint reachable",
             }
+        except RuntimeError as exc:
+            return {"status": "error", "latency_ms": -1, "detail": str(exc)}
         except Exception as exc:
             return {"status": "error", "latency_ms": -1, "detail": str(exc)}
 
     async with httpx.AsyncClient() as client:
         qdrant_task = _check_qdrant()
-        langfuse_task = _check(f"{LANGFUSE_URL}/api/public/health")
+        langfuse_task = _langfuse_health_status()
         qdrant_status, langfuse_status = await asyncio.gather(qdrant_task, langfuse_task)
 
     result = {
