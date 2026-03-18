@@ -11,8 +11,10 @@ services:
       - .env
     environment:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_MODE: ${QDRANT_MODE:-local}
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
-      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_MODE: ${LANGFUSE_MODE:-local}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse:3000}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-finlens_chunks_dev}
     volumes:
       - ./data:/data
@@ -20,8 +22,6 @@ services:
       qdrant:
         condition: service_healthy
         required: false
-      langfuse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
       interval: 10s

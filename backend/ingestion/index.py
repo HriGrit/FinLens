@@ -15,7 +15,7 @@ from qdrant_client.http.exceptions import ResponseHandlingException
 from shared.qdrant import QDRANT_COLLECTION, get_qdrant_client
 
 
-_POINT_ID_FIELDS = ("filename", "company", "year", "doc_type", "element_type")
+_POINT_ID_FIELDS = ("filename", "page_number", "element_type", "chunk_index")
 
 _UPSERT_MAX_ATTEMPTS = 3
 _UPSERT_BACKOFF_SECONDS = [5, 10, 20]  # delay before attempt 2, 3

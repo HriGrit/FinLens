@@ -14,6 +14,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _langfuse = None
+LOCAL_MODE = "local"
+HOSTED_MODE = "hosted"
 
 
 class _NoOpSpan:
@@ -44,6 +46,28 @@ class _NoOpLangfuse:
         return None
 
 
+def _normalize_langfuse_mode(mode: str | None) -> str:
+    """Normalize env var value into a known trace mode."""
+    return HOSTED_MODE if (mode or "").strip().lower() == HOSTED_MODE else LOCAL_MODE
+
+
+def get_langfuse_mode() -> str:
+    """Return active Langfuse mode (`local` default, `hosted` when explicitly selected)."""
+    return _normalize_langfuse_mode(os.getenv("LANGFUSE_MODE"))
+
+
+def get_langfuse_host() -> str:
+    """Return configured Langfuse host URL."""
+    return os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+
+
+def has_langfuse_credentials() -> bool:
+    """Whether Langfuse API credentials are both present and non-empty."""
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
+    return bool(public_key) and bool(secret_key)
+
+
 def _get_langfuse():
     global _langfuse
     if _langfuse is None:
@@ -59,7 +83,7 @@ def _get_langfuse():
                 _langfuse = Langfuse(
                     public_key=public_key,
                     secret_key=secret_key,
-                    host=os.getenv("LANGFUSE_HOST", "http://localhost:3000"),
+                    host=get_langfuse_host(),
                 )
             except Exception as exc:
                 logger.warning("Langfuse init failed (%s); no-op mode.", exc)
