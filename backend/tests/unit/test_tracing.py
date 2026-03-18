@@ -45,6 +45,35 @@ def test_missing_keys_returns_noop_stub(monkeypatch: pytest.MonkeyPatch) -> None
     assert isinstance(lf, tracing._NoOpLangfuse)
 
 
+def test_langfuse_mode_defaults_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LANGFUSE_MODE", raising=False)
+    assert tracing.get_langfuse_mode() == tracing.LOCAL_MODE
+
+
+def test_langfuse_mode_parses_hosted_and_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LANGFUSE_MODE", "hosted")
+    assert tracing.get_langfuse_mode() == tracing.HOSTED_MODE
+    monkeypatch.setenv("LANGFUSE_MODE", "local")
+    assert tracing.get_langfuse_mode() == tracing.LOCAL_MODE
+    monkeypatch.setenv("LANGFUSE_MODE", "LOCAL")
+    assert tracing.get_langfuse_mode() == tracing.LOCAL_MODE
+
+
+def test_get_langfuse_host_prefers_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LANGFUSE_HOST", "https://lf.example.com")
+    assert tracing.get_langfuse_host() == "https://lf.example.com"
+
+
+def test_has_langfuse_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    assert not tracing.has_langfuse_credentials()
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    assert tracing.has_langfuse_credentials()
+
+
 def test_empty_string_keys_treated_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "")

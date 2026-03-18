@@ -35,14 +35,18 @@ class _FakeDoc:
 
 
 class _FakeChunkNode:
-    def __init__(self, text: str):
+    def __init__(self, text: str, metadata: dict | None = None):
         self.text = text
-        self.metadata = {}
+        self.metadata = metadata or {}
 
 
 class _FakeSplitter:
-    def get_nodes_from_documents(self, _documents):
-        return [_FakeChunkNode("income 2022"), _FakeChunkNode("income 2023")]
+    def get_nodes_from_documents(self, documents):
+        src_idx = documents[0].metadata.get("_source_idx", 0) if documents else 0
+        return [
+            _FakeChunkNode("income 2022", metadata={"_source_idx": src_idx}),
+            _FakeChunkNode("income 2023", metadata={"_source_idx": src_idx}),
+        ]
 
 
 _DOC_KWARGS = dict(filename="sample.pdf", company="3M", year="2022")

@@ -256,6 +256,64 @@ async def test_services_status_builds_qdrant_client_inside_to_thread(monkeypatch
     assert status["qdrant"]["status"] == "ok"
 
 
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_services_status_disables_langfuse_in_hosted_mode_when_keys_missing(monkeypatch):
+    calls = {"client_created": 0, "get_collections": 0}
+
+    class _FakeQdrantClient:
+        def get_collections(self):
+            calls["get_collections"] += 1
+            return []
+
+    def _get_qdrant_client():
+        calls["client_created"] += 1
+        return _FakeQdrantClient()
+
+    async def _to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("api.main.get_qdrant_client", _get_qdrant_client)
+    monkeypatch.setattr("api.main.asyncio.to_thread", _to_thread)
+    monkeypatch.setattr("api.main.get_langfuse_mode", lambda: "hosted")
+    monkeypatch.setattr("api.main.has_langfuse_credentials", lambda: False)
+
+    from api.main import services_status
+
+    status = await services_status()
+
+    assert calls["client_created"] == 1
+    assert calls["get_collections"] == 1
+    assert status["langfuse"]["status"] == "disabled"
+    assert "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY" in status["langfuse"]["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_services_status_disables_qdrant_in_hosted_mode_when_credentials_missing(monkeypatch):
+    calls = {"client_created": 0}
+
+    async def _to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    def _get_qdrant_client():
+        calls["client_created"] += 1
+        raise AssertionError("Qdrant client should not be created when hosted mode is misconfigured.")
+
+    monkeypatch.setattr("api.main.get_qdrant_client", _get_qdrant_client)
+    monkeypatch.setattr("api.main.asyncio.to_thread", _to_thread)
+    monkeypatch.setattr("api.main.get_qdrant_mode", lambda: "hosted")
+    monkeypatch.setattr("api.main.get_qdrant_config_error", lambda: "QDRANT_MODE=hosted requires QDRANT_URL and QDRANT_API_KEY")
+
+    from api.main import services_status
+
+    status = await services_status()
+
+    assert calls["client_created"] == 0
+    assert status["qdrant"]["status"] == "disabled"
+    assert "QDRANT_MODE=hosted requires QDRANT_URL and QDRANT_API_KEY" in status["qdrant"]["detail"]
+
+
 @pytest.mark.integration
 def test_ingestion_status_counts_only_ingestible_pdfs(monkeypatch, tmp_path):
     pdf_dir = tmp_path / "pdfs"

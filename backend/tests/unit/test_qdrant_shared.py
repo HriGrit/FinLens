@@ -1,11 +1,30 @@
 from __future__ import annotations
 
 import importlib
+
+import pytest
 from unittest.mock import patch
+
+
+def test_qdrant_mode_defaults_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("QDRANT_MODE", raising=False)
+    import shared.qdrant as m
+
+    assert m.get_qdrant_mode() == m.LOCAL_MODE
+
+
+def test_qdrant_mode_parses_hosted_and_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    import shared.qdrant as m
+
+    monkeypatch.setenv("QDRANT_MODE", "hosted")
+    assert m.get_qdrant_mode() == m.HOSTED_MODE
+    monkeypatch.setenv("QDRANT_MODE", "LOCAL")
+    assert m.get_qdrant_mode() == m.LOCAL_MODE
 
 
 def test_get_qdrant_client_default_timeout(monkeypatch):
     """QdrantClient receives timeout=60 by default."""
+    monkeypatch.setenv("QDRANT_MODE", "local")
     monkeypatch.delenv("QDRANT_TIMEOUT", raising=False)
     monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
 
@@ -20,6 +39,7 @@ def test_get_qdrant_client_default_timeout(monkeypatch):
 
 def test_get_qdrant_client_custom_timeout(monkeypatch):
     """QdrantClient receives timeout from QDRANT_TIMEOUT env var."""
+    monkeypatch.setenv("QDRANT_MODE", "local")
     monkeypatch.setenv("QDRANT_TIMEOUT", "120")
     monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
 
@@ -34,6 +54,7 @@ def test_get_qdrant_client_custom_timeout(monkeypatch):
 
 def test_get_qdrant_client_no_api_key(monkeypatch):
     """Without QDRANT_API_KEY, client is constructed without api_key kwarg."""
+    monkeypatch.setenv("QDRANT_MODE", "local")
     monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
     monkeypatch.delenv("QDRANT_API_KEY", raising=False)
 
@@ -50,6 +71,7 @@ def test_get_qdrant_client_no_api_key(monkeypatch):
 
 def test_get_qdrant_client_with_api_key(monkeypatch):
     """With QDRANT_API_KEY set, client is constructed with api_key kwarg."""
+    monkeypatch.setenv("QDRANT_MODE", "local")
     monkeypatch.setenv("QDRANT_URL", "https://cloud.qdrant.io")
     monkeypatch.setenv("QDRANT_API_KEY", "secret-key")
 
@@ -62,6 +84,33 @@ def test_get_qdrant_client_with_api_key(monkeypatch):
     call_kwargs = mock_client.call_args.kwargs
     assert call_kwargs.get("url") == "https://cloud.qdrant.io"
     assert call_kwargs.get("api_key") == "secret-key"
+
+
+def test_get_qdrant_client_hosted_requires_credentials(monkeypatch):
+    monkeypatch.setenv("QDRANT_MODE", "hosted")
+    monkeypatch.setenv("QDRANT_URL", "https://cloud.qdrant.io")
+    monkeypatch.delenv("QDRANT_API_KEY", raising=False)
+
+    with patch("qdrant_client.QdrantClient") as mock_client:
+        import shared.qdrant as m
+
+        importlib.reload(m)
+        with pytest.raises(RuntimeError, match="QDRANT_MODE=hosted requires QDRANT_URL and QDRANT_API_KEY"):
+            m.get_qdrant_client()
+
+    assert mock_client.call_count == 0
+
+
+def test_get_qdrant_config_error_for_hosted_mode(monkeypatch):
+    import shared.qdrant as m
+
+    monkeypatch.setenv("QDRANT_MODE", "hosted")
+    monkeypatch.delenv("QDRANT_URL", raising=False)
+    monkeypatch.delenv("QDRANT_API_KEY", raising=False)
+
+    assert m.get_qdrant_config_error() == (
+        "QDRANT_MODE=hosted requires QDRANT_URL and QDRANT_API_KEY"
+    )
 
 
 def test_get_qdrant_collection_reads_current_env(monkeypatch):

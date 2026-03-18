@@ -2,7 +2,7 @@
 test_langfuse.py — Integration smoke test for Langfuse end-to-end tracing.
 
 Requires:
-  - Langfuse running at http://localhost:3000
+  - Langfuse running at LANGFUSE_HOST (or http://localhost:3000 by default)
   - Qdrant running at http://localhost:6333 with indexed corpus
   - .env with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, OPENROUTER_API_KEY
 
