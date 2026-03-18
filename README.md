@@ -16,6 +16,20 @@ Run services:
 docker compose up -d
 ```
 
+Langfuse mode:
+
+- Local mode (default): set `LANGFUSE_MODE=local` and keep `LANGFUSE_HOST=http://langfuse:3000` in Docker and `LANGFUSE_HOST=http://localhost:3000` when running backend directly. This uses the included local Langfuse stack.
+- Hosted mode: set `LANGFUSE_MODE=hosted` and set `LANGFUSE_HOST` to your hosted Langfuse URL (for example `https://us.cloud.langfuse.com`). This sends traces to live Langfuse without local container requirements.
+
+`LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are required when `LANGFUSE_MODE=hosted`; when absent, tracing is disabled at runtime with a warning.
+
+Qdrant mode:
+
+- Local mode (default): set `QDRANT_MODE=local` (or omit). In this mode, the stack expects local, unauthenticated Qdrant at `QDRANT_URL`.
+- Hosted mode: set `QDRANT_MODE=hosted`, `QDRANT_URL` to the managed cluster endpoint, and `QDRANT_API_KEY` to the cluster API key.
+
+In hosted mode, missing `QDRANT_URL` or `QDRANT_API_KEY` keeps the backend running but disables Qdrant checks and ingestion/retrieval work with clear status details.
+
 ## CI & Validation
 
 Pull requests are validated by `.github/workflows/pr-checks.yml` and are path-aware.

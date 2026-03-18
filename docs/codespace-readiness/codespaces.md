@@ -15,6 +15,7 @@ Create Codespaces secrets (or set env vars manually):
 - `OPENROUTER_API_KEY` (required for generation)
 - `QDRANT_URL` (required; local Docker or managed endpoint)
 - `QDRANT_API_KEY` (required only for managed/authenticated Qdrant)
+- `QDRANT_MODE` (`local` for local Docker, `hosted` for managed)
 - `QDRANT_COLLECTION` (optional; defaults to `finlens_chunks_dev`)
 - Optional: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`
 
@@ -43,6 +44,7 @@ The ingestion command discovers files from this directory.
 ### Option A: Managed Qdrant
 
 ```env
+QDRANT_MODE=hosted
 QDRANT_URL=https://<your-cluster-url>
 QDRANT_API_KEY=<api-key>
 QDRANT_COLLECTION=finlens_chunks_dev
@@ -51,6 +53,7 @@ QDRANT_COLLECTION=finlens_chunks_dev
 ### Option B: Local Docker Qdrant
 
 ```env
+QDRANT_MODE=local
 QDRANT_URL=http://qdrant:6333
 QDRANT_API_KEY=
 QDRANT_COLLECTION=finlens_chunks_dev
