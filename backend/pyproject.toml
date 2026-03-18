@@ -13,8 +13,6 @@ dependencies = [
     "llama-index-vector-stores-qdrant>=0.6.0",
     # --- BM25 ---
     "llama-index-retrievers-bm25>=0.5.0",
-    # --- reranking ---
-    "sentence-transformers>=3.4.1",
     # --- LLM ---
     "litellm>=1.69.0",
     # --- observability ---
@@ -37,6 +35,9 @@ eval = [
     "ragas>=0.2.16",
     "datasets>=3.3.2",
 ]
+rerank = [
+    "sentence-transformers>=3.4.1",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
@@ -44,6 +45,7 @@ dev = [
     "pytest-timeout>=2.3.1",
     {include-group = "ingestion"},
     {include-group = "eval"},
+    {include-group = "rerank"},
 ]
 
 [tool.pytest.ini_options]

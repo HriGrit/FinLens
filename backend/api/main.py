@@ -17,10 +17,13 @@ import dataclasses
 import time
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import Final
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from generation.generate import (
@@ -41,6 +44,7 @@ from shared.qdrant import (
     get_qdrant_client,
     get_qdrant_config_error,
     get_qdrant_mode,
+    get_qdrant_url,
 )
 
 @asynccontextmanager
@@ -52,9 +56,51 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="FinLens API", version="0.1.0", lifespan=_lifespan)
 logger = logging.getLogger(__name__)
 
+CORS_ALLOWED_ORIGINS_ENV: Final = "CORS_ALLOWED_ORIGINS"
+STATIC_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+def _load_allowed_origins() -> list[str]:
+    raw = os.getenv(CORS_ALLOWED_ORIGINS_ENV, "").strip()
+    if not raw:
+        return ["*"]
+    return [value.strip() for value in raw.split(",") if value.strip()]
+
+
+def _is_frontend_route(path: str) -> bool:
+    normalized = path.strip("/")
+    if not normalized:
+        return True
+    if normalized.startswith(
+        (
+            "chat",
+            "health",
+            "models",
+            "status",
+            "ready",
+            "openapi",
+            "docs",
+            "redoc",
+        )
+    ):
+        return False
+    return True
+
+
+def _spa_index() -> FileResponse | None:
+    index_file = STATIC_DIR / "index.html"
+    if not index_file.exists():
+        return None
+    return FileResponse(index_file)
+
+
+if STATIC_DIR.exists():
+    assets_dir = STATIC_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_load_allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -68,10 +114,18 @@ _ingestion_cache_expires_at: float = 0.0
 
 
 def _discover_ingestible_filenames() -> set[str]:
-    return {
+    discovered = {
         spec.path.name
         for spec in discover_pdfs(PDF_DIR)
         if spec.doc_type != "OTHER"
+    }
+    if discovered:
+        return discovered
+    manifest = _load_manifest()
+    return {
+        filename
+        for filename, entry in manifest.items()
+        if isinstance(filename, str) and isinstance(entry, dict)
     }
 
 
@@ -159,6 +213,51 @@ class FreeModelResponse(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready() -> dict:
+    checks: dict[str, dict] = {}
+    overall = "ok"
+
+    if not os.getenv("OPENROUTER_API_KEY", "").strip():
+        checks["openrouter"] = {
+            "status": "error",
+            "detail": "OPENROUTER_API_KEY not set",
+        }
+        overall = "error"
+    else:
+        checks["openrouter"] = {"status": "ok", "detail": "API key configured"}
+
+    if get_qdrant_config_error():
+        checks["qdrant"] = {"status": "error", "detail": get_qdrant_config_error()}
+        overall = "error"
+    else:
+        start = time.perf_counter()
+        try:
+            client = get_qdrant_client()
+            collections = client.get_collections()
+            checks["qdrant"] = {
+                "status": "ok",
+                "detail": f"connected to {get_qdrant_url()}",
+                "collections": len(getattr(collections, "collections", [])),
+                "latency_ms": int((time.perf_counter() - start) * 1000),
+            }
+        except Exception as exc:
+            checks["qdrant"] = {"status": "error", "detail": str(exc)}
+            overall = "error"
+
+    langfuse_status = get_langfuse_mode()
+    if langfuse_status == "hosted" and not has_langfuse_credentials():
+        checks["langfuse"] = {
+            "status": "error",
+            "detail": "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY required in hosted mode",
+        }
+        overall = "error"
+    else:
+        checks["langfuse"] = {"status": "ok", "detail": f"mode={langfuse_status}"}
+
+    return {"status": overall, "checks": checks}
 
 
 @app.get("/models/free", response_model=list[FreeModelResponse])
@@ -449,10 +548,29 @@ async def services_status() -> dict:
             "detail": "API key configured" if os.getenv("OPENROUTER_API_KEY", "") else "OPENROUTER_API_KEY not set",
         },
         "postgres": {
-            "status": "ok" if langfuse_status["status"] == "ok" else "error",
+            "status": "ok" if langfuse_status["status"] == "ok" else "disabled",
             "latency_ms": -1,
-            "detail": "via Langfuse" if langfuse_status["status"] == "ok" else "Langfuse unreachable",
+            "detail": "via hosted Langfuse" if langfuse_status["status"] == "ok" else "Langfuse unavailable",
         },
     }
 
     return result
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def serve_frontend(path: str) -> FileResponse:
+    index_response = _spa_index()
+    if not index_response:
+        raise HTTPException(
+            status_code=404,
+            detail="Frontend assets are not available in this runtime.",
+        )
+
+    if not _is_frontend_route(path):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    candidate = STATIC_DIR / path
+    if candidate.is_file():
+        return FileResponse(candidate)
+
+    return index_response

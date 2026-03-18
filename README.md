@@ -16,16 +16,46 @@ Run services:
 docker compose up -d
 ```
 
+Production monolith build (backend API + hosted Langfuse + hosted Qdrant):
+
+```bash
+docker build -f Dockerfile.monolith -t finlens-monolith .
+docker run --env-file .env -p 8000:8000 finlens-monolith
+```
+
+The production container serves the built frontend assets from `frontend/dist` and the API on `/`. Runtime checks are exposed at:
+
+```bash
+GET /health
+GET /ready
+GET /status/services
+```
+
+The monolith image now includes the runtime retrieval artifacts from `data/` that production needs for hybrid retrieval:
+
+```bash
+data/bm25_index.pkl
+data/ingestion_manifest.json
+```
+
+If you re-run ingestion, rebuild and redeploy the image so Render gets the updated BM25 artifact and manifest.
+
+Optional performance control:
+
+```bash
+RERANK_ENABLED=false   # keep false for a lighter serving image; set true if local reranker is needed
+```
+
 Langfuse mode:
 
-- Local mode (default): set `LANGFUSE_MODE=local` and keep `LANGFUSE_HOST=http://langfuse:3000` in Docker and `LANGFUSE_HOST=http://localhost:3000` when running backend directly. This uses the included local Langfuse stack.
+- Local mode: set `LANGFUSE_MODE=local` and keep `LANGFUSE_HOST=http://langfuse:3000` in Docker and `LANGFUSE_HOST=http://localhost:3000` when running backend directly. This uses the included local Langfuse stack.
 - Hosted mode: set `LANGFUSE_MODE=hosted` and set `LANGFUSE_HOST` to your hosted Langfuse URL (for example `https://us.cloud.langfuse.com`). This sends traces to live Langfuse without local container requirements.
 
 `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are required when `LANGFUSE_MODE=hosted`; when absent, tracing is disabled at runtime with a warning.
 
 Qdrant mode:
 
-- Local mode (default): set `QDRANT_MODE=local` (or omit). In this mode, the stack expects local, unauthenticated Qdrant at `QDRANT_URL`.
+- Local mode: set `QDRANT_MODE=local` (or omit). In this mode, the stack expects local, unauthenticated Qdrant at `QDRANT_URL`.
 - Hosted mode: set `QDRANT_MODE=hosted`, `QDRANT_URL` to the managed cluster endpoint, and `QDRANT_API_KEY` to the cluster API key.
 
 In hosted mode, missing `QDRANT_URL` or `QDRANT_API_KEY` keeps the backend running but disables Qdrant checks and ingestion/retrieval work with clear status details.

@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/node_modules/
+backend/.venv/
+frontend/dist/
+data/*
+!data/bm25_index.pkl
+!data/ingestion_manifest.json
