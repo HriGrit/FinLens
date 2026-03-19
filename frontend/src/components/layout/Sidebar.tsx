@@ -7,7 +7,7 @@ import { usePolling } from '../../hooks/usePolling'
 import { getModels, getServicesStatus, getIngestionStatus } from '../../api/client'
 
 export function Sidebar() {
-  const { 
+  const {
     health,
     ingestion,
     freeModels,
@@ -116,9 +116,6 @@ export function Sidebar() {
             <option value="openrouter">OpenRouter</option>
             <option value="groq">Groq</option>
           </select>
-          <p className="text-[10px] text-muted">
-            Choose the provider first. The model dropdown below reloads with that provider&apos;s model list.
-          </p>
         </div>
         <div className="flex flex-col gap-1">
           <label className="font-mono text-[10px] text-muted">Model</label>
