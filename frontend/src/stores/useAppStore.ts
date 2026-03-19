@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+export type LlmProvider = 'openrouter' | 'groq'
+
 export interface Citation {
   index: number
   company: string | null
@@ -126,6 +128,34 @@ export const DEFAULT_FREE_MODELS: FreeModelOption[] = [
   },
 ]
 
+export const DEFAULT_GROQ_MODELS: FreeModelOption[] = [
+  {
+    id: 'llama-3.3-70b-versatile',
+    name: 'Groq: Llama 3.3 70B Versatile',
+    context_length: 32768,
+  },
+  {
+    id: 'llama-3.1-8b-instant',
+    name: 'Groq: Llama 3.1 8B Instant',
+    context_length: 131072,
+  },
+  {
+    id: 'llama-3.2-11b-vision-preview',
+    name: 'Groq: Llama 3.2 11B Vision Preview',
+    context_length: 8192,
+  },
+  {
+    id: 'qwen2.5-72b-instruct',
+    name: 'Groq: Qwen2.5 72B Instruct',
+    context_length: 32768,
+  },
+]
+
+export const DEFAULT_PROVIDER_MODELS: Record<LlmProvider, FreeModelOption[]> = {
+  openrouter: DEFAULT_FREE_MODELS,
+  groq: DEFAULT_GROQ_MODELS,
+}
+
 export interface ServiceStatus {
   status: 'ok' | 'error'
   latency_ms: number
@@ -136,6 +166,7 @@ export interface ServiceHealth {
   qdrant: ServiceStatus
   langfuse: ServiceStatus
   openrouter: ServiceStatus
+  groq: ServiceStatus
   postgres: ServiceStatus
 }
 
@@ -156,6 +187,7 @@ interface AppState {
   company: string
   year: string
   model: string
+  provider: LlmProvider
   addMessage: (msg: Message) => void
   setLoading: (v: boolean) => void
   setHealth: (h: ServiceHealth) => void
@@ -164,6 +196,7 @@ interface AppState {
   setCompany: (c: string) => void
   setYear: (y: string) => void
   setModel: (m: string) => void
+  setProvider: (p: LlmProvider) => void
   clearMessages: () => void
 }
 
@@ -172,10 +205,11 @@ export const useAppStore = create<AppState>((set) => ({
   isLoading: false,
   health: null,
   ingestion: null,
-  freeModels: DEFAULT_FREE_MODELS,
+  freeModels: DEFAULT_PROVIDER_MODELS.openrouter,
   company: '',
   year: '',
   model: 'qwen/qwen3-4b:free',
+  provider: 'openrouter',
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   setLoading: (v) => set({ isLoading: v }),
   setHealth: (h) => set({ health: h }),
@@ -187,5 +221,6 @@ export const useAppStore = create<AppState>((set) => ({
   setCompany: (c) => set({ company: c }),
   setYear: (y) => set({ year: y }),
   setModel: (m) => set({ model: m }),
+  setProvider: (p) => set({ provider: p, freeModels: DEFAULT_PROVIDER_MODELS[p] }),
   clearMessages: () => set({ messages: [] }),
 }))

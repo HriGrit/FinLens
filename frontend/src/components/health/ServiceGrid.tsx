@@ -49,6 +49,7 @@ export function ServiceGrid({ health }: { health: ServiceHealth | null }) {
       <ServiceCard label="Qdrant" icon={<Database size={12} />} status={health?.qdrant} />
       <ServiceCard label="Langfuse" icon={<Activity size={12} />} status={health?.langfuse} />
       <ServiceCard label="OpenRouter" icon={<Key size={12} />} status={health?.openrouter} />
+      <ServiceCard label="Groq" icon={<Key size={12} />} status={health?.groq} />
       <ServiceCard label="Postgres" icon={<Server size={12} />} status={health?.postgres} />
     </div>
   )

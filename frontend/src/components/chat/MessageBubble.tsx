@@ -8,10 +8,27 @@ import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 import type { Message } from '../../stores/useAppStore'
 
+function getProviderLabel(model?: string): string | null {
+  if (!model) return null
+  if (model.startsWith('groq/')) return 'Groq'
+  if (model.startsWith('openrouter/')) return 'OpenRouter'
+  return null
+}
+
+function getModelLabel(model?: string): string | null {
+  if (!model) return null
+  if (model.startsWith('groq/')) return model.replace(/^groq\//, '')
+  if (model.startsWith('openrouter/')) return model.replace(/^openrouter\//, '')
+  return model
+}
+
 export function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
   const reasoning = message.reasoning
   const [reasoningExpanded, setReasoningExpanded] = useState(false)
+  const activeModel = message.fallback?.active_model ?? message.model ?? reasoning?.generation.model
+  const providerLabel = getProviderLabel(activeModel)
+  const modelLabel = getModelLabel(activeModel)
 
   return (
     <motion.div
@@ -24,6 +41,17 @@ export function MessageBubble({ message }: { message: Message }) {
       <div className="font-mono text-[11px] uppercase tracking-widest text-muted px-1">
         {isUser ? 'you' : 'finlens'}
       </div>
+
+      {!isUser && providerLabel && modelLabel && (
+        <div className="flex max-w-[85%] flex-wrap items-center gap-2 px-1">
+          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-300">
+            Provider {providerLabel}
+          </span>
+          <span className="font-mono text-[11px] text-text-secondary">
+            {modelLabel}
+          </span>
+        </div>
+      )}
 
       {/* Message body */}
       <div

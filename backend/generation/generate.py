@@ -17,11 +17,14 @@ from pydantic import BaseModel
 
 from .prompt import build_prompt
 from .openrouter_models import get_free_models
+from .groq_models import get_groq_models
 
 DEFAULT_MODEL = "qwen/qwen3-4b:free"
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+GROQ_API_BASE = "https://api.groq.com/openai/v1"
 OPENROUTER_PROVIDER_PREFIX = "openrouter/"
+GROQ_PROVIDER_PREFIX = "groq/"
 KNOWN_PROVIDER_PREFIXES = (
     "openrouter/",
     "openai/",
@@ -78,6 +81,36 @@ class FallbackEvent(BaseModel):
     reason: str
 
 
+def _normalize_model_provider(model: str) -> str:
+    if model.startswith(GROQ_PROVIDER_PREFIX):
+        return "groq"
+    if model.startswith(OPENROUTER_PROVIDER_PREFIX):
+        return "openrouter"
+    return "openrouter"
+
+
+def _provider_credentials(model: str) -> tuple[str, str]:
+    provider = _normalize_model_provider(model)
+    if provider == "groq":
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY not set.")
+        return api_key, GROQ_API_BASE
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY not set.")
+    return api_key, OPENROUTER_API_BASE
+
+
+def _strip_provider_prefix(model: str, provider: str) -> str:
+    if provider == "groq" and model.startswith(GROQ_PROVIDER_PREFIX):
+        return model[len(GROQ_PROVIDER_PREFIX) :]
+    if provider == "openrouter" and model.startswith(OPENROUTER_PROVIDER_PREFIX):
+        return model[len(OPENROUTER_PROVIDER_PREFIX) :]
+    return model
+
+
 def register_langfuse_callbacks() -> None:
     """Install LiteLLM -> Langfuse callbacks. Call at app startup, never at import."""
     litellm.success_callback = ["langfuse"]
@@ -118,19 +151,28 @@ def _is_rate_limited_error(exc: Exception) -> bool:
 
 
 def _candidate_fallback_models(requested_model: str, max_fallbacks: int = 2) -> list[str]:
+    provider = _normalize_model_provider(requested_model)
     try:
-        free_models = get_free_models()
+        if provider == "groq":
+            candidate_models = [option.id for option in get_groq_models()]
+        else:
+            candidate_models = [option.id for option in get_free_models()]
     except Exception:
         return []
 
-    canonical_requested = _strip_openrouter_prefix(requested_model)
+    canonical_requested = _strip_provider_prefix(requested_model, provider)
     normalized_requested = _normalize_model_name(requested_model)
     deduped = []
     seen = set()
 
-    for option in free_models:
-        candidate = _normalize_model_name(option.id)
-        canonical_candidate = _strip_openrouter_prefix(candidate)
+    for model_id in candidate_models:
+        raw_model = (
+            f"{GROQ_PROVIDER_PREFIX}{model_id}"
+            if provider == "groq" and not model_id.startswith(GROQ_PROVIDER_PREFIX)
+            else model_id
+        )
+        candidate = _normalize_model_name(raw_model)
+        canonical_candidate = _strip_provider_prefix(candidate, provider)
         if canonical_candidate == canonical_requested:
             continue
         if canonical_candidate in seen or canonical_requested == candidate or canonical_candidate == normalized_requested:
@@ -166,14 +208,14 @@ def _call_litellm_once(
     model: str,
     query: str,
     context_nodes: list[TextNode],
-    api_key: str,
     lf_metadata: dict[str, str | None],
 ) -> tuple[dict[str, Any], dict[str, int]]:
+    api_key, api_base = _provider_credentials(model)
     response = litellm.completion(
         model=model,
         messages=build_prompt(query, context_nodes),
         api_key=api_key,
-        api_base=OPENROUTER_API_BASE,
+        api_base=api_base,
         metadata=lf_metadata,
     )
     answer, model_reasoning, usage_dict = _validated_answer_and_usage(response)
@@ -233,10 +275,6 @@ def generate(
     trace=None,
 ) -> dict:
     """Call LLM with context nodes; return answer, citations, and token usage."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY not set.")
-
     lf_metadata = {"existing_trace_id": trace.id, "generation_name": "llm_call"} if trace else {}
     normalized_request = _normalize_model_name(model)
     events: list[FallbackEvent] = []
@@ -259,7 +297,6 @@ def generate(
                 model=model_id,
                 query=query,
                 context_nodes=context_nodes,
-                api_key=api_key,
                 lf_metadata=lf_metadata,
             )
             final_result = response_payload

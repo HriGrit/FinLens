@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { ChatResponse, FreeModelOption, IngestionStatus, ServiceHealth } from '../stores/useAppStore'
+import type { ChatResponse, FreeModelOption, IngestionStatus, LlmProvider, ServiceHealth } from '../stores/useAppStore'
 
 const api = axios.create({
   baseURL: '/',
@@ -11,6 +11,7 @@ export interface ChatRequest {
   company?: string
   year?: string
   model?: string
+  provider?: LlmProvider
   retrieval_top_k?: number
   rerank_top_k?: number
 }
@@ -27,6 +28,11 @@ export async function getIngestionStatus(): Promise<IngestionStatus> {
 
 export async function getServicesStatus(): Promise<ServiceHealth> {
   const { data } = await api.get<ServiceHealth>('/status/services')
+  return data
+}
+
+export async function getModels(provider: LlmProvider = 'openrouter'): Promise<FreeModelOption[]> {
+  const { data } = await api.get<FreeModelOption[]>(`/models?provider=${provider}`)
   return data
 }
 

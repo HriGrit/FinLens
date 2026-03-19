@@ -31,6 +31,7 @@ from generation.generate import (
     register_langfuse_callbacks,
 )
 from generation.openrouter_models import get_free_models
+from generation.groq_models import get_groq_models
 from ingestion.discovery import discover_pdfs
 from observability.tracing import create_trace
 from observability.tracing import get_langfuse_host, get_langfuse_mode, has_langfuse_credentials
@@ -163,6 +164,16 @@ def health() -> dict:
 
 @app.get("/models/free", response_model=list[FreeModelResponse])
 def free_models() -> list[FreeModelResponse]:
+    return [FreeModelResponse(**dataclasses.asdict(model)) for model in get_free_models()]
+
+
+@app.get("/models", response_model=list[FreeModelResponse])
+def models(provider: str = "openrouter") -> list[FreeModelResponse]:
+    provider_normalized = provider.strip().lower()
+    if provider_normalized == "groq":
+        return [
+            FreeModelResponse(**dataclasses.asdict(model)) for model in get_groq_models()
+        ]
     return [FreeModelResponse(**dataclasses.asdict(model)) for model in get_free_models()]
 
 
@@ -447,6 +458,11 @@ async def services_status() -> dict:
             "status": "ok" if os.getenv("OPENROUTER_API_KEY", "") else "error",
             "latency_ms": -1,
             "detail": "API key configured" if os.getenv("OPENROUTER_API_KEY", "") else "OPENROUTER_API_KEY not set",
+        },
+        "groq": {
+            "status": "ok" if os.getenv("GROQ_API_KEY", "") else "error",
+            "latency_ms": -1,
+            "detail": "API key configured" if os.getenv("GROQ_API_KEY", "") else "GROQ_API_KEY not set",
         },
         "postgres": {
             "status": "ok" if langfuse_status["status"] == "ok" else "error",

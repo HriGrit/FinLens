@@ -20,6 +20,14 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
 export function TokenAnalysis({ usage, latency_ms, model }: Props) {
   const cost = usage.cost_usd != null ? `$${usage.cost_usd.toFixed(6)}` : '—'
   const latency = latency_ms != null ? `${(latency_ms / 1000).toFixed(2)}s` : '—'
+  const provider =
+    model?.startsWith('groq/') ? 'groq' : model?.startsWith('openrouter/') ? 'openrouter' : null
+  const normalizedModel =
+    provider === 'groq'
+      ? model?.replace(/^groq\//, '')
+      : provider === 'openrouter'
+        ? model?.replace(/^openrouter\//, '')
+        : model
 
   return (
     <div className="rounded-lg border border-border bg-bg p-3 mt-2">
@@ -29,7 +37,8 @@ export function TokenAnalysis({ usage, latency_ms, model }: Props) {
         <Stat icon={<Cpu size={10} />} label="completion" value={usage.completion_tokens.toLocaleString()} />
         <Stat icon={<DollarSign size={10} />} label="cost" value={cost} />
         <Stat icon={<Clock size={10} />} label="latency" value={latency} />
-        {model && <Stat icon={<Zap size={10} />} label="model" value={model} />}
+        {provider && <Stat icon={<Zap size={10} />} label="provider" value={provider} />}
+        {normalizedModel && <Stat icon={<Zap size={10} />} label="model" value={normalizedModel} />}
       </div>
     </div>
   )

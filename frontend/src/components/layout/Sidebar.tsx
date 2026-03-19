@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ServiceGrid } from '../health/ServiceGrid'
 import { IngestionMeter } from '../ingestion/IngestionMeter'
-import { DEFAULT_FREE_MODELS, useAppStore } from '../../stores/useAppStore'
+import { DEFAULT_PROVIDER_MODELS, type LlmProvider, useAppStore } from '../../stores/useAppStore'
 import { usePolling } from '../../hooks/usePolling'
-import { getFreeModels, getServicesStatus, getIngestionStatus } from '../../api/client'
+import { getModels, getServicesStatus, getIngestionStatus } from '../../api/client'
 
 export function Sidebar() {
   const { 
@@ -14,12 +14,14 @@ export function Sidebar() {
     company,
     year,
     model,
+    provider,
     setHealth,
     setIngestion,
     setFreeModels,
     setCompany,
     setYear,
     setModel,
+    setProvider,
   } = useAppStore()
   const [isLoadingModels, setIsLoadingModels] = useState(true)
   const [modelLoadError, setModelLoadError] = useState<string | null>(null)
@@ -40,16 +42,16 @@ export function Sidebar() {
 
     const loadModels = async () => {
       try {
-        const models = await getFreeModels()
+        const models = await getModels(provider)
         if (!cancelled) {
-          setFreeModels(models.length ? models : DEFAULT_FREE_MODELS)
+          setFreeModels(models.length ? models : DEFAULT_PROVIDER_MODELS[provider])
           setModelLoadError(null)
         }
       } catch (error) {
         if (!cancelled) {
-          setFreeModels(DEFAULT_FREE_MODELS)
+          setFreeModels(DEFAULT_PROVIDER_MODELS[provider])
           const msg = error instanceof Error ? error.message : 'Unknown error while loading model list.'
-          setModelLoadError(`Using fallback free models. (${msg})`)
+          setModelLoadError(`Using fallback ${provider} models. (${msg})`)
         }
       } finally {
         if (!cancelled) {
@@ -63,7 +65,15 @@ export function Sidebar() {
     return () => {
       cancelled = true
     }
-  }, [setFreeModels])
+  }, [provider, setFreeModels, setModel])
+
+  const providerLabel = provider === 'groq' ? 'Groq' : 'OpenRouter'
+
+  const onChangeProvider = (nextProvider: LlmProvider) => {
+    setProvider(nextProvider)
+    setModel(DEFAULT_PROVIDER_MODELS[nextProvider][0]?.id ?? '')
+    setIsLoadingModels(true)
+  }
 
   const COMPANIES = ['3M', 'Apple', 'Microsoft', 'Amazon', 'Google']
   const YEARS = ['2015', '2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023']
@@ -87,16 +97,39 @@ export function Sidebar() {
       {/* Filters */}
       <section className="flex flex-col gap-3">
         <span className="font-mono text-[10px] uppercase tracking-widest text-text-secondary">Filters</span>
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <div className="font-mono text-[10px] uppercase tracking-widest text-amber-300">Active Provider</div>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="font-mono text-sm text-text-primary">{providerLabel}</span>
+            <span className="rounded-full border border-amber-500/30 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-300">
+              {freeModels.length} models
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="font-mono text-[10px] text-muted">Provider</label>
+          <select
+            value={provider}
+            onChange={(e) => onChangeProvider(e.target.value as LlmProvider)}
+            className="w-full bg-bg border border-border rounded px-2 py-1.5 text-xs font-mono text-text-primary focus:outline-none focus:border-amber-500/50"
+          >
+            <option value="openrouter">OpenRouter</option>
+            <option value="groq">Groq</option>
+          </select>
+          <p className="text-[10px] text-muted">
+            Choose the provider first. The model dropdown below reloads with that provider&apos;s model list.
+          </p>
+        </div>
         <div className="flex flex-col gap-1">
           <label className="font-mono text-[10px] text-muted">Model</label>
-        <select
+          <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
             className="w-full bg-bg border border-border rounded px-2 py-1.5 text-xs font-mono text-text-primary focus:outline-none focus:border-amber-500/50"
           >
             {isLoadingModels && (
               <option value={model} disabled>
-                Loading free models...
+                Loading {providerLabel} models...
               </option>
             )}
             {!isLoadingModels &&
@@ -107,7 +140,7 @@ export function Sidebar() {
               ))}
           </select>
           {modelLoadError && (
-            <p className="text-[10px] text-amber-400 mt-1">Could not load live model list. Using fallback free models.</p>
+            <p className="mt-1 text-[10px] text-amber-400">Could not load live model list. Using fallback {providerLabel} models.</p>
           )}
         </div>
         <div className="flex flex-col gap-1">
