@@ -19,6 +19,6 @@ data/financebench/
 output.md
 output_nodes.json
 *.pkl
-data/ingestion_manifest.json
 data/chunks/
+!data/bm25_index.pkl
 .DS_Store

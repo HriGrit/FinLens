@@ -1,0 +1,100 @@
+{
+  "3M_2015_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1662,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:14:40Z"
+  },
+  "3M_2016_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 2140,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T18:32:12Z"
+  },
+  "3M_2017_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1617,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:01:54Z"
+  },
+  "3M_2018_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1792,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:08:20Z"
+  },
+  "3M_2019_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1910,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:22:10Z"
+  },
+  "3M_2020_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1692,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:30:29Z"
+  },
+  "3M_2021_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1664,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:36:41Z"
+  },
+  "3M_2022_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 2708,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:46:04Z"
+  },
+  "3M_2023Q2_10Q.pdf": {
+    "attempts": 1,
+    "chunk_count": 895,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:49:52Z"
+  },
+  "ACTIVISIONBLIZZARD_2015_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1728,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-16T19:54:41Z"
+  },
+  "ADOBE_2015_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1243,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-18T23:13:02Z"
+  },
+  "ADOBE_2016_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1203,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-18T23:23:00Z"
+  },
+  "ADOBE_2017_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1168,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-18T23:37:13Z"
+  },
+  "ADOBE_2018_10K.pdf": {
+    "attempts": 1,
+    "chunk_count": 1235,
+    "last_error": null,
+    "status": "success",
+    "updated_at": "2026-03-18T23:43:22Z"
+  }
+}
