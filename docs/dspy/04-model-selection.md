@@ -1,0 +1,156 @@
+# Stage 4: Model Selection
+
+> **The core question:** Given a fixed prompt and fixed retrieval, which LLM gives the best balance of accuracy and cost for FinanceBench-style financial questions?
+
+---
+
+## Can DSPy Tell You Which Model Is Best?
+
+**Short answer: No — not automatically.**
+
+DSPy is a prompt optimiser for a fixed model. It runs gradient-free search over prompt space, but it does not search over model space simultaneously. Asking DSPy "which of these 10 models is best for my task?" is outside what the tool is designed for.
+
+**What DSPy can do indirectly:** You can run the optimiser separately for each model, get a best-optimised prompt per model, then compare those scores. But that requires N full optimisation runs (expensive) and the prompts are not comparable to each other — a prompt optimised for Qwen3-4B may not transfer to Mistral-7B.
+
+**What you actually need for model selection:** A fixed evaluation harness that runs the same prompt (the current one, or the DSPy-optimised one) through each candidate model and scores all outputs with RAGAS.
+
+---
+
+## The Right Approach: Model Comparison Matrix
+
+Design a script (`dspy/scripts/05_compare_models.py`) that takes:
+- A fixed dataset (the FinanceBench test set — same file used for baseline)
+- A fixed prompt (the current `SYSTEM_PROMPT` or a DSPy-optimised candidate)
+- A list of model identifiers
+- The same RAGAS scoring pipeline from `ragas_eval.py`
+
+For each model, it runs the full retrieve → generate → score pipeline and records:
+
+| Model | faithfulness | context_recall | answer_relevancy | answer_correctness | avg_latency_ms | estimated_cost_usd |
+|---|---|---|---|---|---|---|
+| qwen/qwen3-4b:free | 0.72 | 0.68 | 0.74 | 0.61 | 2100 | $0.00 |
+| mistralai/mistral-7b-instruct:free | 0.70 | 0.68 | 0.71 | 0.58 | 1800 | $0.00 |
+| google/gemma-3-12b-it:free | 0.76 | 0.68 | 0.77 | 0.63 | 2800 | $0.00 |
+| meta-llama/llama-3.1-8b-instruct:free | 0.73 | 0.68 | 0.75 | 0.62 | 1900 | $0.00 |
+| mistralai/ministral-3b:free | 0.65 | 0.68 | 0.69 | 0.55 | 1200 | $0.00 |
+
+Note: context_recall is identical across all models because retrieval does not change. Only generation metrics (faithfulness, answer_relevancy, correctness) differ by model.
+
+---
+
+## What the Script Needs to Track
+
+### Per-model metrics
+- The four RAGAS scores (mean across test set)
+- Per-question type breakdown (factual vs. arithmetic vs. risk-factor)
+- Number of failures (empty responses, API errors, rate limit fallbacks)
+
+### Cost
+FinLens already returns `cost_usd` per call from LiteLLM. Sum these across the test set for each model. For free-tier models the cost is zero, but you should still record it — if you move to paid models later, you want historical comparison data.
+
+### Latency
+Record `latency_ms` per call (the API already returns this). The 95th percentile latency matters more than the mean for a user-facing system.
+
+### Failure rate
+Track how many questions triggered the fallback mechanism (`fallback_used: true` in the API response). A model that rate-limits constantly is not viable even if it has high scores.
+
+---
+
+## Model Selection Strategy: Pareto Frontier
+
+You will not find one model that wins on every dimension. The useful frame is the **Pareto frontier**: which models are not dominated by any other model on the metrics you care about?
+
+A model is dominated if there exists another model that is better on every dimension you care about (higher accuracy, lower cost, lower latency). The non-dominated models form the Pareto frontier — these are your candidates.
+
+For example:
+```
+Model A: correctness=0.71, latency=2100ms, cost=$0     ← Pareto optimal (best accuracy/free)
+Model B: correctness=0.68, latency=1300ms, cost=$0     ← Pareto optimal (best latency/free)
+Model C: correctness=0.63, latency=2900ms, cost=$0     ← Dominated by A (worse on both)
+Model D: correctness=0.75, latency=3200ms, cost=$0.002 ← Pareto optimal only if you need top accuracy
+```
+
+Model D is on the frontier if you care about accuracy above all else. Model B is on the frontier if you care about latency. Model C should be eliminated.
+
+---
+
+## How Many Models to Test
+
+Start with the models FinLens already supports via OpenRouter free tier (accessible via `GET /models/free`). At any given time this is approximately 15–20 models. Testing 15 models on a 20-row sample takes roughly 60–90 minutes.
+
+**Recommended test sizes:**
+- **Sample run (sanity check):** 5 rows × 15 models — confirms the harness works, gives rough ranking
+- **Medium run (meaningful signal):** 20 rows × 15 models — enough to identify the top 3–4 candidates
+- **Full run (production decision):** full test set × top 5 candidates — final definitive comparison
+
+Do not run the full test set against all 15 models on the first pass. Use the medium run to eliminate clear losers, then do the full run only on the finalists.
+
+---
+
+## Prompt Portability: Can You Reuse the DSPy-Optimised Prompt Across Models?
+
+Partially. A DSPy-optimised prompt was generated by a meta-LLM evaluating candidates against your training data. The meta-LLM did not know which base model would use the prompt.
+
+In practice:
+- Prompts that emphasise explicit citation instructions (`"cite [n] for every fact"`) transfer well — all models respond to this instruction
+- Prompts with very specific formatting requirements transfer less well — smaller models may ignore complex formatting instructions
+- Instruction-following capability varies significantly by model size and fine-tuning
+
+**Recommended workflow:**
+1. Run model comparison with the **current baseline prompt** (apples to apples)
+2. Run model comparison with the **DSPy-optimised prompt** (does the optimised prompt help all models, or just the one it was tuned on?)
+3. If a model benefits from the optimised prompt and still ranks highly, it is your best candidate
+4. Optionally, run a separate DSPy optimisation for the top 2 candidate models — optimised-per-model prompts will always outperform a shared prompt
+
+---
+
+## Automating the Rerun: Model Drift
+
+Models accessed via API change over time — new quantisation, updated system prompts from the provider, version updates. A model that scored 0.72 this month may score 0.68 next month with no change on your end.
+
+Best practice is to run the model comparison quarterly or after any provider model update. Keep the results archived by date:
+```
+eval/results/model_comparison_2025-01.json
+eval/results/model_comparison_2025-04.json
+```
+
+This gives you a longitudinal view of model behaviour on your specific task.
+
+---
+
+## What DSPy Cannot Tell You (and Nobody Can, Fully)
+
+DSPy can tell you: "Given this prompt and this training set, this model scores 0.74 on answer correctness."
+
+DSPy cannot tell you:
+- Whether the model will hallucinate on a question type not in your test set
+- Whether the model's behaviour is stable (free models are sometimes updated without notice)
+- Whether the model is safe to use (outputs may be inconsistent in edge cases)
+- What happens at scale (rate limits, timeouts under load)
+
+The evaluation pipeline gives you **empirical performance on a defined test set**. It is a necessary condition for model selection but not a sufficient one. Combine the metric results with qualitative review of the outputs (read 20–30 answers manually from each finalist model) before making a final decision.
+
+---
+
+## Summary: The Decision Process
+
+```
+1. Run model comparison on 20-row sample with current prompt
+   → Eliminates clear underperformers
+
+2. Run model comparison on full test set with top 5 candidates
+   → Produces the comparison matrix
+
+3. Identify the Pareto frontier (accuracy vs latency vs cost)
+   → Narrows to 2–3 real candidates
+
+4. Qualitative review: read 20 answers from each finalist manually
+   → Catches pathological failures metrics miss (e.g., always answering in a list)
+
+5. Run DSPy optimisation on your top 2 candidates separately
+   → Confirms whether the improvement is model-agnostic or model-specific
+
+6. Make a decision. Update DEFAULT_MODEL in backend/generation/generate.py.
+
+7. Re-run full RAGAS eval to confirm the combined (model + prompt) improvement.
+```
