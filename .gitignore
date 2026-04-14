@@ -22,3 +22,5 @@ output_nodes.json
 data/ingestion_manifest.json
 data/chunks/
 .DS_Store
+
+graphify-out/
