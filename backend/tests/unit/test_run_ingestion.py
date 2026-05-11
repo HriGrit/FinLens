@@ -12,6 +12,7 @@ from ingestion.run_ingestion import (
     DocSpec,
     _build_batch,
     _load_chunk_artifacts_for_successful_docs,
+    _load_reusable_chunk_artifact,
     _load_manifest,
     _mark_failed,
     _mark_pending,
@@ -19,7 +20,10 @@ from ingestion.run_ingestion import (
     _migrate_registry_to_manifest,
     _normalize_requested_specs,
     _parse_batch,
+    _recover_manifest,
+    _rebuild_bm25_from_artifacts,
     _rebuild_bm25_for_indexed_docs,
+    _reuse_chunk_artifacts_for_batch,
     _save_chunk_artifact,
     _save_manifest,
     main,
@@ -601,3 +605,311 @@ def test_mark_success_skip_verify_artifact_bypasses_check(tmp_path, monkeypatch)
     # Should not raise even though no artifact exists
     _mark_success(manifest, "A_2022_10K.pdf", chunk_count=5, verify_artifact=False)
     assert manifest["A_2022_10K.pdf"]["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Manifest recovery
+# ---------------------------------------------------------------------------
+
+def _manifest_recovery_nodes(filename: str, count: int = 1) -> list[TextNode]:
+    return [
+        TextNode(
+            text=f"Recovered chunk {i}",
+            metadata={
+                "filename": filename,
+                "company": filename.split("_")[0],
+                "year": "2022",
+                "doc_type": "10-K",
+                "page_number": 1,
+                "element_type": "paragraph",
+                "chunk_index": i,
+            },
+        )
+        for i in range(count)
+    ]
+
+
+class _FakeQdrantPoint:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+
+class _FakeQdrantClient:
+    def __init__(self, payloads: list[dict], collection_exists: bool = True):
+        self._payloads = payloads
+        self._collection_exists = collection_exists
+        self._called = False
+
+    def collection_exists(self, collection_name: str) -> bool:
+        return self._collection_exists
+
+    def scroll(self, **kwargs):
+        if self._called:
+            return [], None
+        self._called = True
+        return [_FakeQdrantPoint(payload) for payload in self._payloads], None
+
+
+def _patch_recovery_paths(monkeypatch, tmp_path):
+    from ingestion import run_ingestion as ri
+
+    chunks_dir = tmp_path / "chunks"
+    manifest_path = tmp_path / "ingestion_manifest.json"
+    bm25_path = tmp_path / "bm25_index.pkl"
+    chunks_dir.mkdir()
+    monkeypatch.setattr(ri, "CHUNKS_DIR", chunks_dir)
+    monkeypatch.setattr(ri, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(ri, "REGISTRY_PATH", tmp_path / "missing_registry.json")
+    monkeypatch.setattr(ri, "BM25_INDEX_PATH", bm25_path)
+    return chunks_dir, manifest_path
+
+
+def test_recover_manifest_marks_chunk_only_docs_pending_when_qdrant_unavailable(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    nodes = _manifest_recovery_nodes("A_2022_10K.pdf", count=2)
+    _save_chunk_artifact("A_2022_10K.pdf", nodes)
+    monkeypatch.setattr(
+        ri,
+        "get_qdrant_client",
+        lambda: (_ for _ in ()).throw(ConnectionError("unreachable")),
+    )
+
+    manifest, summary = _recover_manifest(
+        [DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022")],
+        force=False,
+    )
+
+    assert manifest["A_2022_10K.pdf"]["status"] == "pending"
+    assert manifest["A_2022_10K.pdf"]["chunk_count"] is None
+    assert summary.chunk_artifacts_read == 1
+    assert summary.recovered_pending == 1
+    assert summary.qdrant_available is False
+    assert "unreachable" in (summary.qdrant_error or "")
+
+
+def test_recover_manifest_marks_success_when_qdrant_count_matches_chunks(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    nodes = _manifest_recovery_nodes("A_2022_10K.pdf", count=2)
+    _save_chunk_artifact("A_2022_10K.pdf", nodes)
+    monkeypatch.setattr(
+        ri,
+        "get_qdrant_client",
+        lambda: _FakeQdrantClient(
+            [{**node.metadata, "text": node.text} for node in nodes]
+        ),
+    )
+
+    manifest, summary = _recover_manifest(
+        [DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022")],
+        force=False,
+    )
+
+    assert manifest["A_2022_10K.pdf"]["status"] == "success"
+    assert manifest["A_2022_10K.pdf"]["chunk_count"] == 2
+    assert summary.recovered_success == 1
+    assert summary.recovered_pending == 0
+
+
+def test_recover_manifest_marks_pending_when_qdrant_count_differs_from_chunks(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    local_nodes = _manifest_recovery_nodes("A_2022_10K.pdf", count=2)
+    qdrant_nodes = _manifest_recovery_nodes("A_2022_10K.pdf", count=1)
+    _save_chunk_artifact("A_2022_10K.pdf", local_nodes)
+    monkeypatch.setattr(
+        ri,
+        "get_qdrant_client",
+        lambda: _FakeQdrantClient(
+            [{**node.metadata, "text": node.text} for node in qdrant_nodes]
+        ),
+    )
+
+    manifest, summary = _recover_manifest(
+        [DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022")],
+        force=False,
+    )
+
+    assert manifest["A_2022_10K.pdf"]["status"] == "pending"
+    assert summary.recovered_pending == 1
+    assert summary.recovered_success == 0
+
+
+def test_recover_manifest_reconstructs_qdrant_only_chunk_artifact(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _, manifest_path = _patch_recovery_paths(monkeypatch, tmp_path)
+    nodes = _manifest_recovery_nodes("A_2022_10K.pdf", count=2)
+    monkeypatch.setattr(
+        ri,
+        "get_qdrant_client",
+        lambda: _FakeQdrantClient(
+            [{**node.metadata, "text": node.text} for node in nodes]
+        ),
+    )
+
+    manifest, summary = _recover_manifest(
+        [DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022")],
+        force=False,
+    )
+
+    assert manifest["A_2022_10K.pdf"]["status"] == "success"
+    assert summary.qdrant_only_reconstructed == 1
+    assert manifest_path.exists()
+    loaded = _load_reusable_chunk_artifact("A_2022_10K.pdf")
+    assert loaded is not None
+    assert [node.text for node in loaded] == ["Recovered chunk 0", "Recovered chunk 1"]
+
+
+def test_recover_manifest_requires_force_to_overwrite_existing_manifest(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _, manifest_path = _patch_recovery_paths(monkeypatch, tmp_path)
+    manifest_path.write_text(json.dumps({"existing.pdf": {"status": "success"}}))
+    monkeypatch.setattr(ri, "get_qdrant_client", lambda: _FakeQdrantClient([]))
+
+    with pytest.raises(RuntimeError, match="Refusing to overwrite"):
+        _recover_manifest([], force=False)
+
+    manifest, _ = _recover_manifest([], force=True)
+    assert manifest == {}
+    assert json.loads(manifest_path.read_text()) == {}
+
+
+def test_reuse_chunk_artifacts_for_batch_marks_pending_without_parsing(tmp_path, monkeypatch):
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    nodes = _manifest_recovery_nodes("A_2022_10K.pdf", count=1)
+    _save_chunk_artifact("A_2022_10K.pdf", nodes)
+    manifest: dict[str, dict] = {}
+
+    reusable, parse_needed = _reuse_chunk_artifacts_for_batch(
+        [DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022")],
+        manifest,
+    )
+
+    assert parse_needed == []
+    assert reusable["A_2022_10K.pdf"] == nodes
+    assert manifest["A_2022_10K.pdf"]["status"] == "pending"
+    assert manifest["A_2022_10K.pdf"]["attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# BM25 rebuild from chunk artifacts
+# ---------------------------------------------------------------------------
+
+def test_rebuild_bm25_success_source_uses_only_manifest_success_docs(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    success_nodes = _manifest_recovery_nodes("A_2022_10K.pdf", count=2)
+    pending_nodes = _manifest_recovery_nodes("B_2022_10K.pdf", count=1)
+    _save_chunk_artifact("A_2022_10K.pdf", success_nodes)
+    _save_chunk_artifact("B_2022_10K.pdf", pending_nodes)
+
+    summary = _rebuild_bm25_from_artifacts(
+        source="success",
+        all_specs=[
+            DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022"),
+            DocSpec(path=Path("/tmp/B_2022_10K.pdf"), company="B", year="2022"),
+        ],
+        manifest={
+            "A_2022_10K.pdf": {"status": "success"},
+            "B_2022_10K.pdf": {"status": "pending"},
+        },
+    )
+
+    assert summary.documents_included == 1
+    assert summary.nodes_included == 2
+    payload = pickle.loads(ri.BM25_INDEX_PATH.read_bytes())
+    assert [node.metadata["filename"] for node in payload["nodes"]] == [
+        "A_2022_10K.pdf",
+        "A_2022_10K.pdf",
+    ]
+
+
+def test_rebuild_bm25_chunks_source_uses_all_discovered_valid_chunk_artifacts(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    _save_chunk_artifact("A_2022_10K.pdf", _manifest_recovery_nodes("A_2022_10K.pdf", count=2))
+    _save_chunk_artifact("B_2022_10K.pdf", _manifest_recovery_nodes("B_2022_10K.pdf", count=1))
+    _save_chunk_artifact("STALE_2022_10K.pdf", _manifest_recovery_nodes("STALE_2022_10K.pdf", count=1))
+
+    summary = _rebuild_bm25_from_artifacts(
+        source="chunks",
+        all_specs=[
+            DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022"),
+            DocSpec(path=Path("/tmp/B_2022_10K.pdf"), company="B", year="2022"),
+        ],
+        manifest={},
+    )
+
+    assert summary.documents_included == 2
+    assert summary.nodes_included == 3
+    payload = pickle.loads(ri.BM25_INDEX_PATH.read_bytes())
+    assert {node.metadata["filename"] for node in payload["nodes"]} == {
+        "A_2022_10K.pdf",
+        "B_2022_10K.pdf",
+    }
+
+
+def test_rebuild_bm25_skips_malformed_chunk_artifacts(tmp_path, monkeypatch):
+    from ingestion import run_ingestion as ri
+
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    _save_chunk_artifact("A_2022_10K.pdf", _manifest_recovery_nodes("A_2022_10K.pdf", count=1))
+    bad_node = TextNode(
+        text="Bad metadata.",
+        metadata={"filename": "B_2022_10K.pdf", "company": "B"},
+    )
+    _save_chunk_artifact("B_2022_10K.pdf", [bad_node])
+
+    summary = _rebuild_bm25_from_artifacts(
+        source="chunks",
+        all_specs=[
+            DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022"),
+            DocSpec(path=Path("/tmp/B_2022_10K.pdf"), company="B", year="2022"),
+        ],
+        manifest={},
+    )
+
+    assert summary.documents_included == 1
+    assert summary.documents_skipped == 1
+    assert "B_2022_10K.pdf" in (summary.skipped_reasons or [""])[0]
+    payload = pickle.loads(ri.BM25_INDEX_PATH.read_bytes())
+    assert len(payload["nodes"]) == 1
+    assert payload["nodes"][0].metadata["filename"] == "A_2022_10K.pdf"
+
+
+def test_rebuild_bm25_raises_when_no_valid_nodes(tmp_path, monkeypatch):
+    _patch_recovery_paths(monkeypatch, tmp_path)
+
+    with pytest.raises(RuntimeError, match="No valid chunk artifact nodes"):
+        _rebuild_bm25_from_artifacts(
+            source="chunks",
+            all_specs=[DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022")],
+            manifest={},
+        )
+
+
+def test_main_rebuild_bm25_chunks_source(monkeypatch, tmp_path, capsys):
+    from ingestion import run_ingestion as ri
+
+    _patch_recovery_paths(monkeypatch, tmp_path)
+    _save_chunk_artifact("A_2022_10K.pdf", _manifest_recovery_nodes("A_2022_10K.pdf", count=1))
+    monkeypatch.setattr(
+        ri,
+        "_discover_pdfs",
+        lambda: [DocSpec(path=Path("/tmp/A_2022_10K.pdf"), company="A", year="2022")],
+    )
+    monkeypatch.setattr("sys.argv", ["run_ingestion.py", "--rebuild-bm25", "--bm25-source", "chunks"])
+
+    main()
+
+    out = capsys.readouterr().out
+    assert "Rebuilt BM25 index." in out
+    assert ri.BM25_INDEX_PATH.exists()
