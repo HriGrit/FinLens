@@ -22,3 +22,5 @@ output_nodes.json
 data/chunks/
 !data/bm25_index.pkl
 .DS_Store
+
+graphify-out/
